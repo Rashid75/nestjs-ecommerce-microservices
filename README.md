@@ -4,18 +4,21 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 1 — Nx Workspace and Project Foundation.**
-> Only the repository foundation and a single placeholder NestJS application
-> exist. There is no database, authentication, messaging or caching yet.
+> **Current status: Milestone 2 — API Gateway + Auth Foundation.**
+> Two services, one PostgreSQL database, registration, login, JWT
+> authentication and Swagger. No products, cart, orders, Redis or RabbitMQ yet.
 
 ---
 
 ## Table of contents
 
 - [Target architecture](#target-architecture)
+- [What exists today](#what-exists-today)
 - [Technology stack](#technology-stack)
 - [Repository layout](#repository-layout)
 - [Local setup](#local-setup)
+- [Database and migrations](#database-and-migrations)
+- [API](#api)
 - [Everyday commands](#everyday-commands)
 - [Environment variables](#environment-variables)
 - [Architecture decisions](#architecture-decisions)
@@ -26,7 +29,7 @@ explains why it exists before it is added.
 
 ## Target architecture
 
-This is where the project is heading. It is **not** what exists today.
+Where the project is heading. This is **not** what exists today.
 
 ```text
                          ┌─────────────────┐
@@ -49,173 +52,349 @@ This is where the project is heading. It is **not** what exists today.
 Infrastructure: PostgreSQL · Redis · RabbitMQ · MailHog · OpenTelemetry · SigNoz
 ```
 
-Each service will own its own database (`database-per-service`). No service
-reads another service's tables directly; they talk over REST or RabbitMQ.
+Each service owns its own database (`database-per-service`). No service reads
+another service's tables directly; they talk over REST or RabbitMQ.
+
+---
+
+## What exists today
+
+```text
+   Client
+     │  POST /api/auth/register
+     │  POST /api/auth/login
+     │  GET  /api/auth/me           Authorization: Bearer <jwt>
+     ▼
+┌──────────────────────┐
+│  API Gateway :3000   │  public · validates DTOs · Swagger · routes
+└──────────┬───────────┘
+           │ HTTP (axios, 5s timeout)
+           ▼
+┌──────────────────────┐
+│  Auth Service :3001  │  internal · bound to 127.0.0.1 · issues JWTs
+└──────────┬───────────┘
+           │ Sequelize
+           ▼
+┌──────────────────────┐
+│  PostgreSQL auth_db  │  owner: auth_service · schema from migrations only
+└──────────────────────┘
+```
+
+Inside the Auth Service the request path is fixed:
+
+```text
+AuthController → AuthService → UsersRepository → User model → PostgreSQL
+```
+
+Sequelize appears in exactly one layer. A controller never queries.
 
 ---
 
 ## Technology stack
 
-| Concern              | Choice                                 | Introduced in                          |
-| -------------------- | -------------------------------------- | -------------------------------------- |
-| Monorepo tooling     | Nx                                     | Milestone 1                            |
-| Framework            | NestJS 11                              | Milestone 1                            |
-| Language             | TypeScript (strict)                    | Milestone 1                            |
-| Linting / formatting | ESLint (flat config) + Prettier        | Milestone 1                            |
-| Bundling             | webpack via `@nx/webpack`              | Milestone 1                            |
-| Configuration        | `@nestjs/config` + Joi validation      | Milestone 1                            |
-| Database             | PostgreSQL + Sequelize + Sequelize CLI | Milestone 2                            |
-| Auth                 | JWT + Passport                         | Milestone 2                            |
-| API docs             | Swagger / OpenAPI                      | Milestone 2                            |
-| Cache                | Redis                                  | Milestone 4                            |
-| Messaging            | RabbitMQ                               | Milestone 7                            |
-| Email                | Nodemailer + MailHog                   | Milestone 10                           |
-| Logging / tracing    | Pino, OpenTelemetry, SigNoz            | Milestone 11                           |
-| Testing              | Jest + Supertest                       | throughout, formalised in Milestone 13 |
-| Containers           | Docker + Docker Compose                | Milestone 14                           |
-| CI                   | GitHub Actions                         | Milestone 15                           |
+| Concern              | Choice                                           | Introduced in                          |
+| -------------------- | ------------------------------------------------ | -------------------------------------- |
+| Monorepo tooling     | Nx                                               | Milestone 1                            |
+| Framework            | NestJS 11                                        | Milestone 1                            |
+| Language             | TypeScript (strict)                              | Milestone 1                            |
+| Linting / formatting | ESLint (flat config) + Prettier                  | Milestone 1                            |
+| Bundling             | webpack via `@nx/webpack`                        | Milestone 1                            |
+| Configuration        | `@nestjs/config` + Joi validation                | Milestone 1                            |
+| Database             | PostgreSQL 18                                    | Milestone 2                            |
+| ORM / migrations     | Sequelize + sequelize-typescript + sequelize-cli | Milestone 2                            |
+| Password hashing     | bcrypt (cost 12)                                 | Milestone 2                            |
+| Tokens               | JWT (HS256) via `@nestjs/jwt`                    | Milestone 2                            |
+| Authentication       | Passport + `passport-jwt` strategy + guard       | Milestone 2                            |
+| Request validation   | class-validator / class-transformer              | Milestone 2                            |
+| Service-to-service   | HTTP via `@nestjs/axios`                         | Milestone 2                            |
+| API docs             | Swagger / OpenAPI                                | Milestone 2                            |
+| Cache                | Redis                                            | Milestone 4                            |
+| Messaging            | RabbitMQ                                         | Milestone 7                            |
+| Email                | Nodemailer + MailHog                             | Milestone 10                           |
+| Logging / tracing    | Pino, OpenTelemetry, SigNoz                      | Milestone 11                           |
+| Testing              | Jest + Supertest                                 | throughout, formalised in Milestone 13 |
+| Containers           | Docker + Docker Compose                          | Milestone 14                           |
+| CI                   | GitHub Actions                                   | Milestone 15                           |
 
 ---
 
 ## Repository layout
 
-What exists today:
-
 ```text
 ecommerce/
 ├── apps/
-│   └── api-gateway/              # placeholder NestJS app (real gateway: M2)
-│       ├── src/
-│       │   ├── app/
-│       │   │   ├── app.controller.ts
-│       │   │   ├── app.module.ts
-│       │   │   └── app.service.ts
-│       │   ├── config/
-│       │   │   ├── configuration.ts     # typed config object
-│       │   │   └── env.validation.ts    # Joi startup validation
-│       │   └── main.ts                  # bootstrap
-│       ├── jest.config.cts
-│       ├── project.json          # Nx targets + boundary tags
-│       ├── tsconfig.*.json
-│       └── webpack.config.js
-├── .env.example                  # documented template (committed)
-├── .env                          # your local values (git-ignored)
-├── .prettierrc
-├── eslint.config.mjs             # flat config + module boundary rules
-├── jest.config.ts / jest.preset.js
-├── nx.json                       # Nx plugins, caching inputs
-├── package.json
-├── tsconfig.base.json            # shared compiler options + path aliases
+│   ├── api-gateway/                    PUBLIC · port 3000
+│   │   └── src/
+│   │       ├── app/app.module.ts       config + feature modules
+│   │       ├── auth/
+│   │       │   ├── auth.controller.ts  public routes, validated DTOs
+│   │       │   ├── auth-proxy.service.ts  forwards to Auth, maps failures
+│   │       │   └── auth.module.ts      HttpModule baseURL + timeout
+│   │       ├── config/env.validation.ts
+│   │       └── main.ts                 ValidationPipe + Swagger
+│   │
+│   └── auth/                           INTERNAL · port 3001 · 127.0.0.1 only
+│       ├── .sequelizerc                absolute paths for sequelize-cli
+│       └── src/
+│           ├── app/app.module.ts
+│           ├── auth/
+│           │   ├── auth.controller.ts
+│           │   ├── auth.service.ts     hashing, login, token issuance
+│           │   ├── auth.module.ts      JwtModule.registerAsync
+│           │   ├── jwt.strategy.ts     Passport strategy
+│           │   ├── jwt-auth.guard.ts
+│           │   ├── current-user.decorator.ts
+│           │   └── auth.service.spec.ts
+│           ├── users/
+│           │   ├── user.model.ts       sequelize-typescript model
+│           │   ├── users.repository.ts ONLY place that touches Sequelize
+│           │   └── users.module.ts
+│           ├── database/
+│           │   ├── database.module.ts  connection, synchronize: false
+│           │   ├── sequelize-cli.config.js
+│           │   ├── migrations/
+│           │   │   └── 20260825120000-create-users-table.js
+│           │   └── seeders/
+│           ├── config/env.validation.ts
+│           └── main.ts
+│
+├── libs/
+│   └── contracts/                      @ecommerce/contracts · type:lib
+│       └── src/lib/auth/               DTOs shared by gateway and auth
+│
+├── .env.example                        committed template, no real secrets
+├── .env                                local values, git-ignored
+├── eslint.config.mjs                   module boundary rules
+├── nx.json · tsconfig.base.json · package.json
 └── README.md
 ```
-
-`libs/` does not exist yet, deliberately. Shared libraries are created when a
-second consumer actually appears, not in anticipation of one.
 
 ---
 
 ## Local setup
 
-Prerequisites: Node.js 20+ (developed on 24) and npm 10+.
+Prerequisites: Node.js 20+, npm 10+, PostgreSQL 13+ running locally.
+
+**1. Install dependencies**
 
 ```bash
 npm install
 ```
 
+**2. Create the environment file**
+
 ```bash
 cp .env.example .env
 ```
+
+Fill in `AUTH_DB_PASSWORD` and generate a signing key:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+**3. Create the database and role** — see the next section.
+
+**4. Run migrations**
+
+```bash
+npm run auth:migrate
+```
+
+**5. Start both services**
 
 ```bash
 npm start
 ```
 
-Then verify:
+---
 
-```bash
-curl http://localhost:3000/api
+## Database and migrations
+
+The Auth Service owns `auth_db` and connects as the `auth_service` role. That
+role has no rights over any other service's database — the same separation
+Docker or a managed Postgres would give you, done with roles instead.
+
+Create the role and database once, from `psql` as a superuser:
+
+```sql
+CREATE ROLE auth_service WITH LOGIN PASSWORD 'your-password-from-dotenv';
+CREATE DATABASE auth_db OWNER auth_service;
 ```
 
-Expected response:
+**Schema changes only ever happen through migrations.** `synchronize` is
+hardcoded to `false` in `database.module.ts` with no environment toggle, so
+Sequelize is never permitted to issue DDL. The schema in any environment is
+exactly the sum of the migration files in git.
 
-```json
-{ "message": "Hello API" }
+| Command                                                   | What it does                        |
+| --------------------------------------------------------- | ----------------------------------- |
+| `npm run auth:migrate`                                    | Apply every pending migration       |
+| `npm run auth:migrate:status`                             | Show which migrations have run      |
+| `npm run auth:migrate:undo`                               | Roll back the most recent migration |
+| `npm run auth:migration:generate -- --name add-something` | Scaffold a new migration            |
+
+Applied migrations are recorded in the `SequelizeMeta` table. Every migration
+in this project wraps its statements in a single transaction, because
+PostgreSQL supports transactional DDL and sequelize-cli does not add one for
+you — without it a failure halfway through leaves a half-applied schema that
+`SequelizeMeta` does not know about.
+
+Models and migrations are **separate concerns**, kept in sync by hand. The
+migration is the authoritative history; the model is one process's view of it.
+If they disagree, the migration is right.
+
+---
+
+## API
+
+Swagger UI:
+
+- Gateway (public): <http://localhost:3000/docs>
+- Auth Service (internal): <http://127.0.0.1:3001/docs>
+
+| Method | Path                 | Auth   | Returns                   |
+| ------ | -------------------- | ------ | ------------------------- |
+| `POST` | `/api/auth/register` | —      | 201 · user + access token |
+| `POST` | `/api/auth/login`    | —      | 200 · user + access token |
+| `GET`  | `/api/auth/me`       | Bearer | 200 · user profile        |
+
+Status codes you should expect:
+
+| Code | When                                                                 |
+| ---- | -------------------------------------------------------------------- |
+| 400  | Body failed validation, or contained an unknown property             |
+| 401  | Missing, expired, tampered or unknown-subject token; bad credentials |
+| 409  | Email already registered                                             |
+| 503  | Auth Service is not running                                          |
+| 504  | Auth Service did not answer within `HTTP_CLIENT_TIMEOUT_MS`          |
+
+Example:
+
+```bash
+curl -s -X POST http://localhost:3000/api/auth/register -H "Content-Type: application/json" -d '{"email":"ada@example.com","password":"correct-horse-Battery9","firstName":"Ada","lastName":"Lovelace"}'
+```
+
+```bash
+curl -s http://localhost:3000/api/auth/me -H "Authorization: Bearer PASTE_TOKEN_HERE"
 ```
 
 ---
 
 ## Everyday commands
 
-| Command                                 | What it does                                   |
-| --------------------------------------- | ---------------------------------------------- |
-| `npm start`                             | Serve `api-gateway` in watch mode              |
-| `npm run build`                         | Build every project into `dist/`               |
-| `npm run lint`                          | ESLint across every project                    |
-| `npm test`                              | Jest across every project                      |
-| `npm run format`                        | Rewrite files with Prettier                    |
-| `npm run format:check`                  | Fail if formatting is wrong (used by CI later) |
-| `npm run graph`                         | Open the interactive Nx project graph          |
-| `npx nx show projects`                  | List every project Nx knows about              |
-| `npx nx show project api-gateway --web` | Inspect one project's targets                  |
-
-Nx caches task results. A second `npm run build` with no source changes will
-report that it read the output from cache and will finish almost instantly.
+| Command                 | What it does                          |
+| ----------------------- | ------------------------------------- |
+| `npm start`             | Serve gateway **and** auth together   |
+| `npm run start:gateway` | Serve the gateway only                |
+| `npm run start:auth`    | Serve the auth service only           |
+| `npm run build`         | Build every project into `dist/`      |
+| `npm run lint`          | ESLint across every project           |
+| `npm test`              | Jest across every project             |
+| `npm run format`        | Rewrite files with Prettier           |
+| `npm run graph`         | Open the interactive Nx project graph |
+| `npx nx show projects`  | List every project Nx knows about     |
 
 ---
 
 ## Environment variables
 
-Configuration is read from `.env` (and optional `.env.local` overrides), then
-validated by Joi at startup. **If a variable is missing or malformed, the
-process refuses to boot.** This is intentional: a service that starts with bad
-configuration fails later, in production, on a request path.
+Each service validates **its own** variables with Joi at startup and refuses to
+boot if any are missing or malformed. Database variables are prefixed per
+service (`AUTH_DB_*`) because every service owns its own database and an
+unprefixed `DB_HOST` would collide as soon as the second one appears.
 
-| Variable            | Required | Default       | Description                                |
-| ------------------- | -------- | ------------- | ------------------------------------------ |
-| `NODE_ENV`          | no       | `development` | One of `development`, `test`, `production` |
-| `PORT`              | no       | `3000`        | Port the API Gateway listens on            |
-| `API_GLOBAL_PREFIX` | no       | `api`         | Prefix applied to all routes               |
+| Variable                 | Service | Default       | Description                             |
+| ------------------------ | ------- | ------------- | --------------------------------------- |
+| `NODE_ENV`               | both    | `development` | `development` \| `test` \| `production` |
+| `API_GATEWAY_PORT`       | gateway | `3000`        | Public listening port                   |
+| `API_GLOBAL_PREFIX`      | gateway | `api`         | Prefix on all gateway routes            |
+| `AUTH_SERVICE_URL`       | gateway | _required_    | Where to forward auth calls             |
+| `HTTP_CLIENT_TIMEOUT_MS` | gateway | `5000`        | Deadline for outbound calls             |
+| `AUTH_SERVICE_PORT`      | auth    | `3001`        | Internal listening port                 |
+| `AUTH_DB_HOST`           | auth    | _required_    | PostgreSQL host                         |
+| `AUTH_DB_PORT`           | auth    | _required_    | PostgreSQL port                         |
+| `AUTH_DB_USERNAME`       | auth    | _required_    | Role that owns `auth_db`                |
+| `AUTH_DB_PASSWORD`       | auth    | _required_    | Role password                           |
+| `AUTH_DB_DATABASE`       | auth    | _required_    | Database name                           |
+| `AUTH_DB_LOGGING`        | auth    | `false`       | Log emitted SQL — off in production     |
+| `AUTH_DB_SSL`            | auth    | `false`       | Must be true off-loopback               |
+| `JWT_ACCESS_SECRET`      | auth    | _required_    | HS256 key, min 32 characters            |
+| `JWT_ACCESS_TTL_SECONDS` | auth    | `900`         | Access token lifetime                   |
+| `BCRYPT_COST`            | auth    | `12`          | bcrypt work factor (10–15)              |
 
 Rules:
 
-- `.env.example` is committed and documents every variable.
-- `.env` and `.env.local` are git-ignored and must never contain committed
-  secrets.
-- Real secrets belong in a secret manager, never in the repository.
+- `.env.example` is committed and documents every variable. It contains no
+  real values.
+- `.env` and `.env.local` are git-ignored.
+- Bind parameter logging is hardcoded off, so hashes and personal data never
+  reach the application log.
+- Real secrets belong in a secret manager. A `.env` file is a local-development
+  convenience, not a production mechanism.
 
 ---
 
 ## Architecture decisions
 
-**Monorepo (Nx) over polyrepo.** Nine services that share event contracts,
-config conventions and lint rules would otherwise mean nine repositories,
-nine CI pipelines and versioned internal packages. Nx keeps one repository,
-one dependency tree, and an accurate project graph so only affected projects
-are rebuilt and retested. The trade-off is a larger repository and the need
-for explicit boundary rules — which is why we tag projects.
+**Monorepo (Nx) over polyrepo.** Nine services sharing contracts, config
+conventions and lint rules would otherwise mean nine repositories and nine CI
+pipelines. Nx keeps one repository and an accurate project graph, so only
+affected projects rebuild. The cost is that boundaries must be enforced with
+tooling rather than by physics.
 
-**Project boundary tags.** `apps/api-gateway` is tagged `type:app` and
-`scope:gateway`. `eslint.config.mjs` enforces that apps may only depend on
-libraries, and libraries only on other libraries. Without this, a monorepo
-degrades into a distributed monolith where every service imports every other
-service's internals.
+**Project boundary tags.** Apps are tagged `type:app`, libraries `type:lib`.
+`eslint.config.mjs` enforces that apps may only depend on libraries and that
+nothing may depend on an app. An attempt to import `apps/auth` from
+`apps/api-gateway` fails lint.
 
-**Strict TypeScript.** `tsconfig.base.json` enables `strict`, plus
-`noUnusedLocals`, `noUnusedParameters` and `noImplicitOverride`.
-`strictPropertyInitialization` is disabled because NestJS DTO and entity
-classes are populated by decorators and the ORM rather than by constructors.
+**`libs/contracts` exists; shared models never will.** The gateway and the auth
+service exchange the same request and response bodies, so those DTOs are a
+genuine shared concern and live in one place. The `User` Sequelize model is
+the opposite — it is the Auth Service's private persistence detail, and sharing
+it is how a microservice repository becomes a distributed monolith.
 
-**Configuration through `ConfigService`, not `process.env`.** Direct
-`process.env` access is confined to `src/config/configuration.ts`. Everything
-else reads a typed object, which makes configuration testable and its shape
-discoverable.
+**API Gateway as a NestJS app, not nginx.** A reverse proxy forwards bytes
+quickly and understands nothing about the API. The gateway validates bodies,
+maps downstream failures to honest status codes and will later aggregate
+responses, apply rate limiting and attach correlation IDs. In production the
+two stack: a load balancer terminates TLS in front of this.
+
+**HTTP between services, not RabbitMQ.** "Log me in" is genuinely synchronous —
+the caller cannot proceed without an answer. Messaging arrives when there is
+work that truly does not need an answer now (Milestone 7).
+
+**JWT with a 15-minute lifetime, and a database lookup per request.** A signed
+token cannot be revoked before it expires, so the lifetime is the blast radius
+of a stolen one. `JwtStrategy.validate()` re-reads the user on every request so
+that disabling an account takes effect immediately, at the cost of one
+primary-key SELECT — precisely the kind of hot, rarely-changing read Redis will
+absorb in Milestone 4.
+
+**HS256 today, RS256 when a second verifier appears.** One shared secret is
+correct while a single service both signs and verifies. The moment another
+service must verify tokens itself, it would need the signing key — and a key
+that verifies can also mint. That is the trigger to switch to asymmetric keys.
+
+**Uniqueness is enforced by the database, not by a lookup.** `UsersRepository`
+does not SELECT before INSERT. Two concurrent registrations would both pass
+such a check and both insert; only the unique index makes the second one fail.
+The repository catches the constraint violation and translates it.
+
+**`synchronize: false`, hardcoded.** No environment toggle. Sequelize is never
+allowed to emit DDL, so the migration history cannot become a lie.
+
+**`useDefineForClassFields: false`.** Required for decorator-based ORMs. With
+ES2022 class-field semantics, a declared field is defined on the instance and
+shadows the accessor sequelize-typescript installs, so every property silently
+reads `undefined`.
 
 ---
 
 ## Milestone progress
 
 - [x] **1 — Nx workspace and project foundation**
-- [ ] 2 — API Gateway + Auth foundation (PostgreSQL, Sequelize, JWT, Swagger)
+- [x] **2 — API Gateway + Auth foundation** (PostgreSQL, Sequelize, JWT, Swagger)
 - [ ] 3 — Product Service (CRUD, pagination, filtering, sorting)
 - [ ] 4 — Redis and caching
 - [ ] 5 — Inventory Service (transactions, locking, concurrency)
@@ -230,17 +409,34 @@ discoverable.
 - [ ] 14 — Docker and local infrastructure
 - [ ] 15 — CI/CD
 
+Deferred deliberately, with a trigger rather than a vague "later": refresh
+tokens and logout, RBAC role guards, a global exception filter with the
+project's standard error envelope, correlation IDs, rate limiting, Helmet and
+CORS, and health checks.
+
 ---
 
 ## Troubleshooting
 
-**`Config validation error: "PORT" must be a valid port`** — your `.env` has a
-bad value. This error is the validation working as designed.
+**`Config validation error: ...` on startup** — a variable in `.env` is missing
+or malformed. The message names the key. This is the validation working.
 
-**Port 3000 already in use** — change `PORT` in `.env`, or stop the other
-process.
+**`503 Auth service is unavailable`** — the gateway is up but the Auth Service
+is not. Start it with `npm run start:auth`, or use `npm start` for both.
+
+**`SequelizeConnectionError: password authentication failed`** — `AUTH_DB_*` in
+`.env` does not match the role you created in PostgreSQL.
+
+**`relation "users" does not exist`** — migrations have not been applied. Run
+`npm run auth:migrate`.
+
+**`Unknown authentication strategy "jwt"`** — `JwtStrategy` is missing from a
+module's `providers`. Instantiation is what registers it with Passport.
+
+**Every model property reads `undefined`** — `useDefineForClassFields` is true
+somewhere. It must be false for sequelize-typescript.
+
+**`Projects cannot be imported by a relative or absolute path`** — a project
+imported across a boundary. Fix the dependency direction; do not relax the rule.
 
 **Nx returns a stale result** — clear the local cache with `npx nx reset`.
-
-**Lint reports a module boundary violation** — a project imported something its
-tags do not allow. Fix the dependency direction rather than loosening the rule.
