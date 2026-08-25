@@ -43,3 +43,9 @@ Thumbs.db
 .nx/migrate-runs
 .claude/worktrees
 .claude/settings.local.json
+
+# environment files (never commit real values)
+.env
+.env.local
+.env.*.local
+!.env.example
