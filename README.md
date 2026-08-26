@@ -19,6 +19,7 @@ explains why it exists before it is added.
 - [Local setup](#local-setup)
 - [Database and migrations](#database-and-migrations)
 - [API](#api)
+- [Postman](#postman)
 - [Everyday commands](#everyday-commands)
 - [Environment variables](#environment-variables)
 - [Architecture decisions](#architecture-decisions)
@@ -162,6 +163,7 @@ ecommerce/
 │   └── contracts/                      @ecommerce/contracts · type:lib
 │       └── src/lib/auth/               DTOs shared by gateway and auth
 │
+├── postman/                            collection + local environment
 ├── .env.example                        committed template, no real secrets
 ├── .env                                local values, git-ignored
 ├── eslint.config.mjs                   module boundary rules
@@ -278,6 +280,40 @@ curl -s -X POST http://localhost:3000/api/auth/register -H "Content-Type: applic
 ```bash
 curl -s http://localhost:3000/api/auth/me -H "Authorization: Bearer PASTE_TOKEN_HERE"
 ```
+
+---
+
+## Postman
+
+Two files in [`postman/`](postman), both committed:
+
+| File                                       | What it is                                 |
+| ------------------------------------------ | ------------------------------------------ |
+| `ecommerce.postman_collection.json`        | Requests, assertions and per-request notes |
+| `ecommerce.local.postman_environment.json` | URLs, ports and test credentials           |
+
+**Import both**: Postman → _Import_ → drag both files in. Then select
+**`ecommerce · local`** in the environment picker (top right) — a collection-level
+pre-request script fails loudly with a clear message if you forget.
+
+The collection is kept in step with the API as milestones land. It is
+organised so that the failures are as instructive as the successes:
+
+| Folder                      | Contents                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `1 · Happy path`            | Register → Login → Me. Chains state, re-runnable.                                                                                                           |
+| `2 · Validation & security` | Seven requests that are _supposed_ to fail: malformed body, mass assignment, duplicate email, wrong password, unknown email, missing token, tampered token. |
+| `3 · Auth Service directly` | The same calls on `:3001`, bypassing the gateway.                                                                                                           |
+| `4 · Downstream failure`    | Requires the Auth Service to be stopped on purpose.                                                                                                         |
+
+Every request carries assertions, so **Run collection** doubles as a smoke
+test. Folder 1's register step generates a unique `ada+<timestamp>@example.com`
+each run, so it never trips the unique index.
+
+Variables that hold a credential (`password`, `accessToken`) are typed
+`secret`, so Postman masks them in the UI. The environment file contains **no
+production data and no signing key** — `JWT_ACCESS_SECRET` lives only in
+`.env`, which is git-ignored.
 
 ---
 
@@ -438,5 +474,13 @@ somewhere. It must be false for sequelize-typescript.
 
 **`Projects cannot be imported by a relative or absolute path`** — a project
 imported across a boundary. Fix the dependency direction; do not relax the rule.
+
+**`Starting inspector on localhost:9229 failed: address already in use`** — two
+services tried to attach a Node debugger to the same port, and the second one
+never boots. Each serve target pins its own inspector port in `project.json`
+(gateway 9229, auth 9230); a new service needs the next free one.
+
+**Postman: `Missing environment variable(s)`** — the `ecommerce · local`
+environment is not selected in the top-right picker.
 
 **Nx returns a stale result** — clear the local cache with `npx nx reset`.

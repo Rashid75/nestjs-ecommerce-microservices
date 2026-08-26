@@ -1,0 +1,600 @@
+{
+  "info": {
+    "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
+    "name": "E-Commerce Microservices",
+    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 2 — API Gateway + Auth Service.**\n\nFolders 1–2 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1 · Happy path (via API Gateway)",
+      "description": "The flow a real client performs. Each request stores what the next one needs, so run them in order.",
+      "item": [
+        {
+          "name": "01 Register",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Generate a unique email per run so this request can be executed",
+                  "// repeatedly without hitting the 409 from the unique index.",
+                  "// The '+tag' form is a real, deliverable address shape.",
+                  "const unique = `ada+${Date.now()}@example.com`;",
+                  "pm.environment.set('email', unique);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('returns a user and a token', () => {",
+                  "  pm.expect(body).to.have.property('user');",
+                  "  pm.expect(body).to.have.property('tokens');",
+                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.tokens.tokenType).to.eql('Bearer');",
+                  "});",
+                  "",
+                  "pm.test('token lifetime is short (<= 1 hour)', () => {",
+                  "  pm.expect(body.tokens.expiresIn).to.be.at.most(3600);",
+                  "});",
+                  "",
+                  "pm.test('role defaults to CUSTOMER', () => {",
+                  "  pm.expect(body.user.role).to.eql('CUSTOMER');",
+                  "});",
+                  "",
+                  "pm.test('the password hash never appears in the response', () => {",
+                  "  pm.expect(pm.response.text()).to.not.include('$2b$');",
+                  "  pm.expect(body.user).to.not.have.property('passwordHash');",
+                  "  pm.expect(body.user).to.not.have.property('password');",
+                  "});",
+                  "",
+                  "pm.test('email was normalised to lowercase', () => {",
+                  "  pm.expect(body.user.email).to.eql(body.user.email.toLowerCase());",
+                  "});",
+                  "",
+                  "// Hand state to the requests that follow.",
+                  "pm.environment.set('accessToken', body.tokens.accessToken);",
+                  "pm.environment.set('userId', body.user.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "register"]
+            },
+            "description": "Creates an account and returns an access token immediately, so the client does not need a second round trip to log in.\n\n**201, not 200** — a resource was created.\n\nThe `password` is validated by the gateway BEFORE the request is forwarded: minimum 12 characters, at least one lowercase, one uppercase and one digit, maximum 72 bytes (bcrypt's hard limit — anything beyond 72 bytes is silently ignored by bcrypt, so we reject rather than truncate a credential)."
+          }
+        },
+        {
+          "name": "02 Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK (login creates nothing, so not 201)', () =>",
+                  "  pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('returns a fresh access token', () => {",
+                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('same user as registration', () => {",
+                  "  pm.expect(body.user.id).to.eql(pm.environment.get('userId'));",
+                  "});",
+                  "",
+                  "pm.test('no password hash in the response', () => {",
+                  "  pm.expect(pm.response.text()).to.not.include('$2b$');",
+                  "});",
+                  "",
+                  "pm.environment.set('accessToken', body.tokens.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "login"]
+            },
+            "description": "Verifies a credential and issues a token. Returns **200**, not 201, because nothing was created.\n\nNotice this endpoint takes roughly a quarter of a second. That is bcrypt at cost 12 doing its job — deliberately slow hashing is what makes a stolen password table expensive to crack."
+          }
+        },
+        {
+          "name": "03 Me",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('returns the authenticated user', () => {",
+                  "  pm.expect(body.id).to.eql(pm.environment.get('userId'));",
+                  "  pm.expect(body.email).to.eql(pm.environment.get('email'));",
+                  "});",
+                  "",
+                  "pm.test('profile exposes only safe fields', () => {",
+                  "  pm.expect(Object.keys(body).sort()).to.eql(",
+                  "    ['createdAt', 'email', 'firstName', 'id', 'lastName', 'role']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "me"]
+            },
+            "description": "The endpoint that proves the whole chain works.\n\nThe gateway does NOT open the token — it forwards the `Authorization` header untouched. The Auth Service verifies the signature and expiry, then re-reads the user from PostgreSQL, so a disabled or deleted account loses access on the very next request rather than when the token expires.\n\nThe response is a deliberately narrow projection. If a field is not in that list, no client can see it."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 · Validation & security (these SHOULD fail)",
+      "description": "Every request here is expected to be rejected. Read the assertions — the point is not that they fail, but exactly HOW they fail. Run folder 1 first: several of these reuse the email and token it stored.",
+      "item": [
+        {
+          "name": "04 Register — malformed body → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "const messages = pm.response.json().message;",
+                  "",
+                  "pm.test('reports every problem at once, not just the first', () => {",
+                  "  pm.expect(messages).to.be.an('array');",
+                  "  pm.expect(messages.length).to.be.above(1);",
+                  "});",
+                  "",
+                  "pm.test('rejects the invalid email', () =>",
+                  "  pm.expect(messages.join(' ')).to.include('valid email'));",
+                  "",
+                  "pm.test('rejects the weak password', () =>",
+                  "  pm.expect(messages.join(' ')).to.include('12 characters'));",
+                  "",
+                  "pm.test('never echoes the submitted password back', () =>",
+                  "  pm.expect(pm.response.text()).to.not.include('short'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"not-an-email\",\n  \"password\": \"short\",\n  \"firstName\": \"\",\n  \"lastName\": \"B\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "register"]
+            },
+            "description": "Rejected by the gateway's global `ValidationPipe` before any network hop to the Auth Service.\n\n`abortEarly: false` is why you get every error at once instead of one restart-and-retry per typo."
+          }
+        },
+        {
+          "name": "05 Register — privilege escalation attempt → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('the unknown property is named and refused', () => {",
+                  "  const messages = pm.response.json().message;",
+                  "  pm.expect(messages.join(' ')).to.include('property role should not exist');",
+                  "});",
+                  "",
+                  "pm.test('no account was created, so no token was issued', () => {",
+                  "  pm.expect(pm.response.text()).to.not.include('accessToken');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"attacker@example.com\",\n  \"password\": \"correct-horse-Battery9\",\n  \"firstName\": \"Mallory\",\n  \"lastName\": \"Attacker\",\n  \"role\": \"ADMIN\",\n  \"isActive\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "register"]
+            },
+            "description": "**The most important negative test in this collection.**\n\nThis is a MASS ASSIGNMENT attack: send extra fields and hope the server copies the whole body onto the database row. Frameworks that do `User.create(req.body)` hand out admin accounts this way.\n\nTwo independent things stop it here:\n\n1. `whitelist: true` strips any property with no validation decorator on the DTO — `role` and `isActive` are removed before the controller sees them.\n2. `forbidNonWhitelisted: true` escalates from silent stripping to a loud 400, so the client learns immediately instead of wondering why their field was ignored.\n\nTry commenting out `forbidNonWhitelisted` in `apps/api-gateway/src/main.ts` and re-running: you will get a 201 with a CUSTOMER account. Stripped, but silently."
+          }
+        },
+        {
+          "name": "06 Register — duplicate email → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "",
+                  "pm.test('explains the conflict without leaking anything else', () => {",
+                  "  pm.expect(pm.response.json().message).to.include('already exists');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "register"]
+            },
+            "description": "Re-registers the email that request 01 created. Run folder 1 first.\n\nThis 409 does NOT come from a 'does this email exist?' lookup — there is no such query. `UsersRepository` inserts, PostgreSQL's unique index rejects it, and the repository translates the constraint violation.\n\nWhy that matters: a check-then-insert is a race. Two simultaneous registrations both find nothing and both insert. Only the unique index is actually atomic.\n\nNote this response DOES confirm the address is registered — that is user enumeration, accepted deliberately here for shopper experience. For a health or finance product, make the opposite choice."
+          }
+        },
+        {
+          "name": "07 Login — wrong password → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "",
+                  "pm.test('generic message — does not say WHICH part was wrong', () => {",
+                  "  pm.expect(pm.response.json().message).to.eql('Invalid email or password');",
+                  "});",
+                  "",
+                  "// Stored so the next request can prove the two are identical.",
+                  "pm.environment.set('wrongPasswordMs', pm.response.responseTime);",
+                  "pm.environment.set('wrongPasswordBody', pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"definitely-Wrong9999\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "login"]
+            },
+            "description": "A real account, the wrong password. Note the response time in the bottom bar — remember it for the next request."
+          }
+        },
+        {
+          "name": "08 Login — unknown email → 401 (enumeration check)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "",
+                  "pm.test('byte-identical to the wrong-password response', () => {",
+                  "  const previous = pm.environment.get('wrongPasswordBody');",
+                  "  if (previous) {",
+                  "    pm.expect(pm.response.text()).to.eql(previous);",
+                  "  } else {",
+                  "    pm.expect.fail('Run request 07 first — it stores the body to compare against');",
+                  "  }",
+                  "});",
+                  "",
+                  "pm.test('timing is comparable, so response time reveals nothing', () => {",
+                  "  const previous = Number(pm.environment.get('wrongPasswordMs'));",
+                  "  const now = pm.response.responseTime;",
+                  "  console.log(`wrong password: ${previous}ms | unknown email: ${now}ms`);",
+                  "  // Both paths run a real bcrypt comparison, so neither should be",
+                  "  // an order of magnitude faster than the other.",
+                  "  pm.expect(now).to.be.above(previous / 10);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody-here-at-all@example.com\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "login"]
+            },
+            "description": "An address that has no account at all.\n\nCompare this response — and its response time — with request 07. Same status, same body, similar duration.\n\nThat similarity is engineered. `AuthService.login()` runs a bcrypt comparison against a pre-computed dummy hash when no user is found, so the 'no such user' path costs the same as the 'wrong password' path. Without it, an unknown email would return in ~1ms while a known one takes ~250ms, and an attacker could harvest which addresses have accounts by timing alone — never guessing a single password.\n\nOpen the Postman Console (View → Show Postman Console) to see both timings printed side by side."
+          }
+        },
+        {
+          "name": "09 Me — no token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "",
+                  "pm.test('no user data leaked', () => {",
+                  "  pm.expect(pm.response.text()).to.not.include('@');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "me"]
+            },
+            "description": "No `Authorization` header at all. The `JwtAuthGuard` on the Auth Service rejects the request before the handler runs."
+          }
+        },
+        {
+          "name": "10 Me — tampered token → 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Flip one character of the PAYLOAD segment, leaving the signature",
+                  "// untouched. The token still looks structurally valid; only the",
+                  "// signature check can tell that it was modified.",
+                  "const token = pm.environment.get('accessToken');",
+                  "if (!token) {",
+                  "  throw new Error('Run folder 1 first — no accessToken stored');",
+                  "}",
+                  "const [header, payload, signature] = token.split('.');",
+                  "const flipped = payload.slice(0, -1) + (payload.slice(-1) === 'A' ? 'B' : 'A');",
+                  "pm.variables.set('tamperedToken', `${header}.${flipped}.${signature}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "",
+                  "pm.test('the signature is what catches it', () => {",
+                  "  // A JWT is signed, not encrypted. Anyone can READ the claims;",
+                  "  // nobody without the key can CHANGE them and still verify.",
+                  "  pm.expect(pm.response.code).to.eql(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{tamperedToken}}" }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "me"]
+            },
+            "description": "Takes the real token stored by folder 1 and alters one character of its payload.\n\nThis demonstrates the single most misunderstood property of JWTs: they are **signed, not encrypted**. Paste your token into jwt.io and you can read every claim with no key whatsoever. What you cannot do without the key is change `role` to `ADMIN` and still produce a valid signature — which is exactly what this request tries."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 · Auth Service directly (internal :3001)",
+      "description": "The same endpoints, called on the internal service instead of through the gateway. Useful for seeing what the gateway adds — and for isolating whether a bug is in the gateway or in Auth.\n\nNote the URLs have NO `/api` prefix: `setGlobalPrefix` is configured on the gateway only.\n\nIn production these ports would not be reachable at all. The service binds to `127.0.0.1`, so this works from your machine and from nowhere else.",
+      "item": [
+        {
+          "name": "11 Login (direct, no /api prefix)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('identical response shape to the gateway route', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('user');",
+                  "  pm.expect(body).to.have.property('tokens');",
+                  "});",
+                  "",
+                  "pm.environment.set('accessToken', pm.response.json().tokens.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{authUrl}}/auth/login",
+              "host": ["{{authUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Same response as the gateway route, one hop shorter. The Auth Service validates the body itself — it never trusts its caller, even though the gateway already validated."
+          }
+        },
+        {
+          "name": "12 Me (direct)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('same profile projection as via the gateway', () => {",
+                  "  pm.expect(Object.keys(pm.response.json()).sort()).to.eql(",
+                  "    ['createdAt', 'email', 'firstName', 'id', 'lastName', 'role']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{authUrl}}/auth/me",
+              "host": ["{{authUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Proves the gateway is a pass-through for the `Authorization` header and adds nothing to the token itself."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 · Downstream failure (stop the Auth Service first)",
+      "description": "These require you to deliberately break something. Stop the Auth Service — press Ctrl+C in its terminal, or run `npx nx reset` on that process — while leaving the gateway running.\n\nThe distinction being tested: the difference between 'the service answered, and the answer was an error' and 'the service did not answer at all'. Collapsing both to 500 is the common mistake, and it leaves clients unable to react to anything.",
+      "item": [
+        {
+          "name": "13 Login while Auth Service is stopped → 503",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('503 Service Unavailable, not 500', () => {",
+                  "  pm.response.to.have.status(503);",
+                  "});",
+                  "",
+                  "pm.test('does not leak internal hostnames or ports', () => {",
+                  "  const text = pm.response.text();",
+                  "  pm.expect(text).to.not.include('127.0.0.1');",
+                  "  pm.expect(text).to.not.include('3001');",
+                  "  pm.expect(text).to.not.include('ECONNREFUSED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "login"]
+            },
+            "description": "With Auth stopped, axios fails with `ECONNREFUSED`. `AuthProxyService.forward()` maps that to **503 Service Unavailable** — an honest statement that a dependency is down, and a signal a client can retry on.\n\nThe raw axios error, which names our internal host and port, goes to the gateway's log and never to the client.\n\nThe other two mappings, for comparison:\n- `ECONNABORTED` / `ETIMEDOUT` → **504 Gateway Timeout** (set `HTTP_CLIENT_TIMEOUT_MS=1` in `.env` and restart the gateway to provoke it)\n- anything else unanswered → **502 Bad Gateway**\n\nWhen Auth DOES answer — a 401 or a 409 — that status is passed straight through unchanged. A 409 from Auth must reach the client as a 409."
+          }
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Runs before every request in the collection.",
+          "const required = ['gatewayUrl', 'apiPrefix', 'password'];",
+          "const missing = required.filter((key) => !pm.environment.get(key));",
+          "if (missing.length > 0) {",
+          "  throw new Error(",
+          "    `Missing environment variable(s): ${missing.join(', ')}. ` +",
+          "    'Select the \"ecommerce · local\" environment in the top-right picker.'",
+          "  );",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "note",
+      "value": "All real values live in the environment, not here, so the collection can be shared without carrying anyone's tokens.",
+      "type": "string"
+    }
+  ]
+}
