@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
+import { CatalogModule } from '../catalog/catalog.module';
 import { gatewayEnvSchema } from '../config/env.validation';
 
 /**
@@ -23,6 +24,7 @@ import { gatewayEnvSchema } from '../config/env.validation';
       cache: true,
     }),
     AuthModule,
+    CatalogModule,
   ],
 })
 export class AppModule {}

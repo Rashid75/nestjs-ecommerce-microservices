@@ -18,6 +18,7 @@ export interface GatewayEnv {
   API_GATEWAY_PORT: number;
   API_GLOBAL_PREFIX: string;
   AUTH_SERVICE_URL: string;
+  PRODUCT_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
 }
 
@@ -33,6 +34,8 @@ export const gatewayEnvSchema = Joi.object({
   // `uri` rather than `string` so a missing scheme fails here rather than
   // producing a baffling axios error on the first forwarded request.
   AUTH_SERVICE_URL: Joi.string().uri().required(),
+
+  PRODUCT_SERVICE_URL: Joi.string().uri().required(),
 
   // Every outbound call needs a deadline. Without one, a hung downstream
   // service holds a gateway request open indefinitely; enough of those and the

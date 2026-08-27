@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "nx run-many -t serve -p api-gateway auth --output-style=stream",
+    "start": "nx run-many -t serve -p api-gateway auth product --output-style=stream",
     "start:gateway": "nx serve api-gateway",
     "start:auth": "nx serve auth",
+    "start:product": "nx serve product",
     "stop": "node tools/free-ports.mjs",
     "build": "nx run-many -t build",
     "lint": "nx run-many -t lint",
@@ -16,7 +17,12 @@
     "auth:migrate": "nx run auth:migrate",
     "auth:migrate:undo": "nx run auth:migrate:undo",
     "auth:migrate:status": "nx run auth:migrate:status",
-    "auth:migration:generate": "nx run auth:migration:generate --"
+    "auth:migration:generate": "nx run auth:migration:generate --",
+    "product:migrate": "nx run product:migrate",
+    "product:migrate:undo": "nx run product:migrate:undo",
+    "product:migrate:status": "nx run product:migrate:status",
+    "product:migration:generate": "nx run product:migration:generate --",
+    "db:migrate": "nx run-many -t migrate -p auth product"
   },
   "private": true,
   "dependencies": {

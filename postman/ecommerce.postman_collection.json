@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
     "name": "E-Commerce Microservices",
-    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 2 — API Gateway + Auth Service.**\n\nFolders 1–2 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 3 — API Gateway + Auth Service + Product Service.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -69,11 +69,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
@@ -115,11 +124,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
@@ -157,7 +175,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
@@ -204,11 +225,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"not-an-email\",\n  \"password\": \"short\",\n  \"firstName\": \"\",\n  \"lastName\": \"B\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
@@ -242,11 +272,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"attacker@example.com\",\n  \"password\": \"correct-horse-Battery9\",\n  \"firstName\": \"Mallory\",\n  \"lastName\": \"Attacker\",\n  \"role\": \"ADMIN\",\n  \"isActive\": true\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
@@ -275,11 +314,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
@@ -312,11 +360,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"definitely-Wrong9999\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
@@ -359,11 +416,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"nobody-here-at-all@example.com\",\n  \"password\": \"{{password}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
@@ -441,7 +507,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{tamperedToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tamperedToken}}"
+              }
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
@@ -480,11 +549,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{authUrl}}/auth/login",
@@ -514,7 +592,10 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
             ],
             "url": {
               "raw": "{{authUrl}}/auth/me",
@@ -554,11 +635,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
@@ -566,6 +656,614 @@
               "path": ["{{apiPrefix}}", "auth", "login"]
             },
             "description": "With Auth stopped, axios fails with `ECONNREFUSED`. `AuthProxyService.forward()` maps that to **503 Service Unavailable** — an honest statement that a dependency is down, and a signal a client can retry on.\n\nThe raw axios error, which names our internal host and port, goes to the gateway's log and never to the client.\n\nThe other two mappings, for comparison:\n- `ECONNABORTED` / `ETIMEDOUT` → **504 Gateway Timeout** (set `HTTP_CLIENT_TIMEOUT_MS=1` in `.env` and restart the gateway to provoke it)\n- anything else unanswered → **502 Bad Gateway**\n\nWhen Auth DOES answer — a 401 or a 409 — that status is passed straight through unchanged. A 409 from Auth must reach the client as a 409."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 · Catalogue (products & categories)",
+      "description": "The Milestone 3 catalogue API, through the gateway.\n\nRun top to bottom — 14 creates the category that 16 puts a product in, and later requests reuse both ids. The negative cases at the end are the interesting ones: they demonstrate the ORDER BY allow-list, the SKU unique index, the foreign key, and why soft-deleting a category needs an application-level check.\n\n⚠️ These endpoints are currently UNAUTHENTICATED. That is a known gap tracked in docs/PROJECT-PLAN.md, not an oversight — closing it needs the RS256 decision. Do not expose this stack beyond localhost.",
+      "item": [
+        {
+          "name": "14 Create category",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Unique per run: the slug and name both have live-unique indexes.",
+                  "const stamp = Date.now().toString().slice(-8);",
+                  "pm.environment.set('categorySlug', `laptops-${stamp}`);",
+                  "pm.environment.set('categoryName', `Laptops ${stamp}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('slug was normalised to lowercase', () => {",
+                  "  pm.expect(body.slug).to.eql(body.slug.toLowerCase());",
+                  "});",
+                  "",
+                  "pm.test('new categories are active', () => {",
+                  "  pm.expect(body.isActive).to.eql(true);",
+                  "});",
+                  "",
+                  "pm.environment.set('categoryId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{categoryName}}\",\n  \"slug\": \"{{categorySlug}}\",\n  \"description\": \"Portable computers\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "categories"]
+            },
+            "description": "The slug is the URL-safe identifier. Its alphabet is deliberately narrow — lowercase letters, digits and single hyphens — because it ends up in a public path segment.\n\nUniqueness is enforced by a PARTIAL unique index (`WHERE deleted_at IS NULL`), so a soft-deleted category does not reserve its slug forever."
+          }
+        },
+        {
+          "name": "15 List categories",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('returns a bare array — categories are not paginated', () => {",
+                  "  pm.expect(pm.response.json()).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('includes the category just created', () => {",
+                  "  const ids = pm.response.json().map((c) => c.id);",
+                  "  pm.expect(ids).to.include(pm.environment.get('categoryId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "categories"]
+            },
+            "description": "Unpaginated on purpose: categories are a small, bounded set and a navigation menu wants all of them at once.\n\nThat decision has a trigger for revisiting — hundreds of categories, or nesting — recorded in docs/PROJECT-PLAN.md. Contrast with `/products`, which is paginated because a catalogue is not bounded."
+          }
+        },
+        {
+          "name": "16 Create product",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const stamp = Date.now().toString().slice(-8);",
+                  "pm.environment.set('productSku', `LAP-X1C-${stamp}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('price is a STRING, not a number', () => {",
+                  "  // DECIMAL(12,2) in Postgres. A JSON number is an IEEE-754 double",
+                  "  // and cannot hold 19.99 exactly, so money crosses the wire as an",
+                  "  // exact decimal string.",
+                  "  pm.expect(body.price).to.be.a('string');",
+                  "  pm.expect(body.price).to.eql('1899.00');",
+                  "});",
+                  "",
+                  "pm.test('SKU was normalised to uppercase', () => {",
+                  "  pm.expect(body.sku).to.eql(body.sku.toUpperCase());",
+                  "});",
+                  "",
+                  "pm.test('status defaults to DRAFT, not ACTIVE', () => {",
+                  "  // Nothing goes on sale by accident.",
+                  "  pm.expect(body.status).to.eql('DRAFT');",
+                  "});",
+                  "",
+                  "pm.environment.set('productId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ThinkPad X1 Carbon\",\n  \"description\": \"14-inch business laptop\",\n  \"sku\": \"{{productSku}}\",\n  \"price\": 1899,\n  \"categoryId\": \"{{categoryId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"]
+            },
+            "description": "Note `price` goes IN as a JSON number and comes OUT as a string. The service converts with `toFixed(2)` before the value ever reaches the driver, so it never round-trips through a float on its way into the database.\n\n`status` is omitted, so it defaults to DRAFT. A default of ACTIVE would mean a half-finished import is immediately purchasable."
+          }
+        },
+        {
+          "name": "17 Get product by id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('the category is JOINed in, not a second request', () => {",
+                  "  pm.expect(body.category).to.be.an('object');",
+                  "  pm.expect(body.category.id).to.eql(pm.environment.get('categoryId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "The embedded `category` comes from `include: [Category]` — one SQL JOIN.\n\nWithout it, reading `product.category` would issue a second query per product. Over a 20-item list that is the N+1 QUERY PROBLEM: 1 + 20 round trips instead of 1."
+          }
+        },
+        {
+          "name": "18 List products (default page)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('response is enveloped, not a bare array', () => {",
+                  "  pm.expect(body).to.have.property('items');",
+                  "  pm.expect(body).to.have.property('meta');",
+                  "});",
+                  "",
+                  "pm.test('meta carries everything a pager needs', () => {",
+                  "  pm.expect(Object.keys(body.meta).sort()).to.eql(",
+                  "    ['hasNext', 'hasPrevious', 'limit', 'page', 'total', 'totalPages']);",
+                  "});",
+                  "",
+                  "pm.test('defaults are page 1, limit 20', () => {",
+                  "  pm.expect(body.meta.page).to.eql(1);",
+                  "  pm.expect(body.meta.limit).to.eql(20);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"]
+            },
+            "description": "Returning a bare array is the common shortcut and it is a mistake: the client cannot tell whether more data exists, so it guesses from `length === limit`. Adding the envelope later is a breaking change for every consumer."
+          }
+        },
+        {
+          "name": "19 List products (filter + sort + paginate)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('every result is in the requested category', () => {",
+                  "  body.items.forEach((p) =>",
+                  "    pm.expect(p.categoryId).to.eql(pm.environment.get('categoryId')));",
+                  "});",
+                  "",
+                  "pm.test('results are sorted by price ascending', () => {",
+                  "  const prices = body.items.map((p) => Number(p.price));",
+                  "  const sorted = [...prices].sort((a, b) => a - b);",
+                  "  pm.expect(prices).to.eql(sorted);",
+                  "});",
+                  "",
+                  "pm.test('limit is respected', () => {",
+                  "  pm.expect(body.items.length).to.be.at.most(5);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"],
+              "query": [
+                {
+                  "key": "categoryId",
+                  "value": "{{categoryId}}"
+                },
+                {
+                  "key": "minPrice",
+                  "value": "100"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "price"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "asc"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "Everything combines: category filter, price floor, sort field, sort direction, page and limit.\n\nThe composite index `(status, created_at DESC)` serves the default listing. This query sorts by price, which is why `products_price_idx` exists too. Each index in the migration is justified against a specific query — an index costs write throughput on every INSERT and UPDATE, so \"index everything\" is as wrong as \"index nothing\"."
+          }
+        },
+        {
+          "name": "20 List products — invalid sortBy → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('the allow-list rejected the value', () => {",
+                  "  const messages = pm.response.json().message;",
+                  "  pm.expect(messages.join(' ')).to.include('sortBy');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"],
+              "query": [
+                {
+                  "key": "sortBy",
+                  "value": "password; DROP TABLE products;--"
+                }
+              ]
+            },
+            "description": "**The most important negative test in this folder.**\n\n`ORDER BY` is the one part of a SQL statement that CANNOT be parameterised — there is no `ORDER BY $1`. So whatever a client sends as `sortBy` would be concatenated into the statement by a naive implementation:\n\n```js\norder: [[req.query.sortBy, \"ASC\"]]   // ← hands the caller your SQL\n```\n\nThe defence is an enum allow-list: `sortBy` may only be `name`, `price`, `createdAt` or `updatedAt`, checked by class-validator before the service ever runs. Anything else is a 400.\n\nEvery other value in this query — search terms, price bounds, ids — travels as a BIND PARAMETER, which is why they need no such treatment."
+          }
+        },
+        {
+          "name": "21 List products — inverted price range → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('says what is wrong rather than returning nothing', () => {",
+                  "  pm.expect(JSON.stringify(pm.response.json())).to.include('minPrice');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"],
+              "query": [
+                {
+                  "key": "minPrice",
+                  "value": "500"
+                },
+                {
+                  "key": "maxPrice",
+                  "value": "100"
+                }
+              ]
+            },
+            "description": "Both values are individually valid, so no DTO decorator can catch this — the rule is about the RELATIONSHIP between two fields, which is a service-layer concern.\n\nWithout the check the query is legal and returns an empty page, and the client reads \"no results\" instead of \"you made a mistake\"."
+          }
+        },
+        {
+          "name": "22 Create product — duplicate SKU → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "",
+                  "pm.test('names the field that collided', () => {",
+                  "  pm.expect(pm.response.json().message).to.include('sku');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Duplicate SKU attempt\",\n  \"sku\": \"{{productSku}}\",\n  \"price\": 999.99,\n  \"categoryId\": \"{{categoryId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"]
+            },
+            "description": "Reuses the SKU request 16 created. Run this folder in order.\n\nThe 409 does NOT come from a \"does this SKU exist?\" lookup — there is no such query. The repository inserts, the partial unique index rejects it, and the error is translated.\n\nWhy that matters: check-then-insert is a race. Two concurrent creates both find nothing and both insert. Only the index is atomic."
+          }
+        },
+        {
+          "name": "23 Create product — unknown categoryId → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request, not 404', () => {",
+                  "  // The ROUTE resolved fine. The bad value was in the body, so this",
+                  "  // is a malformed request, not a missing resource.",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('names categoryId', () => {",
+                  "  pm.expect(JSON.stringify(pm.response.json())).to.include('categoryId');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Orphan product\",\n  \"sku\": \"ORPHAN-0001\",\n  \"price\": 10,\n  \"categoryId\": \"00000000-0000-4000-8000-000000000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"]
+            },
+            "description": "A well-formed UUID that references nothing.\n\nThe FOREIGN KEY catches it — again, no pre-check SELECT. `ON DELETE RESTRICT` on that same key is what stops a category being hard-deleted while products point at it."
+          }
+        },
+        {
+          "name": "24 Patch product price only",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test('the price changed', () => {",
+                  "  pm.expect(body.price).to.eql('1599.50');",
+                  "});",
+                  "",
+                  "pm.test('NOTHING ELSE was wiped', () => {",
+                  "  // The regression this guards: spreading the DTO would include",
+                  "  // `name: undefined` and write NULL over a NOT NULL column.",
+                  "  pm.expect(body.name).to.eql('ThinkPad X1 Carbon');",
+                  "  pm.expect(body.description).to.eql('14-inch business laptop');",
+                  "  pm.expect(body.sku).to.eql(pm.environment.get('productSku'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 1599.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "PATCH, not PUT — and the difference is not stylistic.\n\nPUT REPLACES a resource: fields you omit are cleared. Sending `{ \"price\": 1599.5 }` as a PUT would wipe the name and description. PATCH means \"change exactly what I sent\", which is what an admin price-edit form actually wants.\n\nThe service builds its update object key by key rather than spreading the DTO, because class-transformer materialises every optional property as `undefined` — and `{ name: undefined }` reaching Sequelize is a request to write NULL."
+          }
+        },
+        {
+          "name": "25 Delete category that still has products → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "",
+                  "pm.test('says how many products are blocking it', () => {",
+                  "  pm.expect(pm.response.json().message).to.match(/product/i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories/{{categoryId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "categories", "{{categoryId}}"]
+            },
+            "description": "The subtle one.\n\n`products.category_id` declares `ON DELETE RESTRICT`, so PostgreSQL would refuse a hard delete. But this is a SOFT delete — an UPDATE setting `deleted_at` — and no row is being removed, so no foreign key is violated. The database would happily let the category vanish from listings while its products still referenced it.\n\nSo CategoriesService counts products first and refuses. That is the general shape of the trade-off: soft deletes buy recoverable history and cost you the database's referential guarantees, which you then re-implement in the application."
+          }
+        },
+        {
+          "name": "26 Delete product",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                  "",
+                  "pm.test('empty body — the status already said it', () => {",
+                  "  pm.expect(pm.response.text()).to.eql('');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "A SOFT delete: `deleted_at` is set, the row stays. Order history, invoices and analytics will reference this product long after it stops being sold, and a hard delete would orphan all of it.\n\nWorth saying plainly: setting `status` to ARCHIVED is usually what people actually want. Archiving keeps the item visible in admin views and reports; deleting hides it everywhere.\n\n204 with an empty body, not 200 with `{ \"deleted\": true }`. The status code already said what happened."
+          }
+        },
+        {
+          "name": "27 Get the deleted product → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "",
+                  "pm.test('soft-deleted rows are invisible to normal reads', () => {",
+                  "  // `paranoid: true` adds `WHERE deleted_at IS NULL` to every SELECT.",
+                  "  // The row is still in the table — try it in psql.",
+                  "  pm.expect(pm.response.code).to.eql(404);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "Proof that the soft delete works from the API side.\n\nTo see the other half, query the table directly:\n\n```sql\nSELECT sku, deleted_at FROM products WHERE deleted_at IS NOT NULL;\n```\n\nThe row is there. `paranoid: true` is what makes Sequelize filter it out — and note that raw SQL will NOT, which is exactly why the unique index on `sku` is partial."
           }
         }
       ]

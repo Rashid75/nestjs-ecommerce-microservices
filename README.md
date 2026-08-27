@@ -4,16 +4,21 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 2 — API Gateway + Auth Foundation.**
-> Two services, one PostgreSQL database, registration, login, JWT
-> authentication and Swagger. No products, cart, orders, Redis or RabbitMQ yet.
+> **Current status: Milestone 3 — Product Service.**
+> Three services, two PostgreSQL databases, JWT authentication, and a full
+> catalogue API with pagination, filtering and sorting. No Redis, cart,
+> orders or RabbitMQ yet.
+
+📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
+what is delivered, what is deferred and the trigger that brings each deferred
+item back.
 
 ---
 
 ## Table of contents
 
-- [Target architecture](#target-architecture)
 - [What exists today](#what-exists-today)
+- [Target architecture](#target-architecture)
 - [Technology stack](#technology-stack)
 - [Repository layout](#repository-layout)
 - [Local setup](#local-setup)
@@ -23,8 +28,42 @@ explains why it exists before it is added.
 - [Everyday commands](#everyday-commands)
 - [Environment variables](#environment-variables)
 - [Architecture decisions](#architecture-decisions)
-- [Milestone progress](#milestone-progress)
+- [Known gaps](#known-gaps)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## What exists today
+
+```text
+   Client
+     │  POST /api/auth/register   ·   GET  /api/products?search=&page=
+     │  POST /api/auth/login      ·   POST /api/products
+     │  GET  /api/auth/me         ·   GET  /api/categories
+     ▼
+┌──────────────────────┐
+│  API Gateway :3000   │  public · /api · DTO validation · Swagger · routing
+└──────────┬───────────┘
+           │ HTTP (axios, 5s timeout, honest failure mapping)
+     ┌─────┴───────────────┐
+     ▼                     ▼
+┌────────────────┐  ┌──────────────────┐
+│  Auth  :3001   │  │  Product  :3002  │   both bound to 127.0.0.1
+└───────┬────────┘  └────────┬─────────┘
+        │ Sequelize          │ Sequelize
+        ▼                    ▼
+┌──────────────────┐  ┌──────────────────────┐
+│ ecommerce_auth_db│  │ ecommerce_product_db │  schema from migrations only
+└──────────────────┘  └──────────────────────┘
+```
+
+Inside every service the request path is fixed:
+
+```text
+Controller → Service → Repository → Sequelize Model → PostgreSQL
+```
+
+Sequelize appears in exactly one layer. A controller never queries.
 
 ---
 
@@ -58,65 +97,32 @@ another service's tables directly; they talk over REST or RabbitMQ.
 
 ---
 
-## What exists today
-
-```text
-   Client
-     │  POST /api/auth/register
-     │  POST /api/auth/login
-     │  GET  /api/auth/me           Authorization: Bearer <jwt>
-     ▼
-┌──────────────────────┐
-│  API Gateway :3000   │  public · validates DTOs · Swagger · routes
-└──────────┬───────────┘
-           │ HTTP (axios, 5s timeout)
-           ▼
-┌──────────────────────┐
-│  Auth Service :3001  │  internal · bound to 127.0.0.1 · issues JWTs
-└──────────┬───────────┘
-           │ Sequelize
-           ▼
-┌───────────────────────────┐
-│ PostgreSQL                │  owner: ecommerce_auth_service
-│   ecommerce_auth_db       │  schema from migrations only
-└───────────────────────────┘
-```
-
-Inside the Auth Service the request path is fixed:
-
-```text
-AuthController → AuthService → UsersRepository → User model → PostgreSQL
-```
-
-Sequelize appears in exactly one layer. A controller never queries.
-
----
-
 ## Technology stack
 
-| Concern              | Choice                                           | Introduced in                          |
-| -------------------- | ------------------------------------------------ | -------------------------------------- |
-| Monorepo tooling     | Nx                                               | Milestone 1                            |
-| Framework            | NestJS 11                                        | Milestone 1                            |
-| Language             | TypeScript (strict)                              | Milestone 1                            |
-| Linting / formatting | ESLint (flat config) + Prettier                  | Milestone 1                            |
-| Bundling             | webpack via `@nx/webpack`                        | Milestone 1                            |
-| Configuration        | `@nestjs/config` + Joi validation                | Milestone 1                            |
-| Database             | PostgreSQL 18                                    | Milestone 2                            |
-| ORM / migrations     | Sequelize + sequelize-typescript + sequelize-cli | Milestone 2                            |
-| Password hashing     | bcrypt (cost 12)                                 | Milestone 2                            |
-| Tokens               | JWT (HS256) via `@nestjs/jwt`                    | Milestone 2                            |
-| Authentication       | Passport + `passport-jwt` strategy + guard       | Milestone 2                            |
-| Request validation   | class-validator / class-transformer              | Milestone 2                            |
-| Service-to-service   | HTTP via `@nestjs/axios`                         | Milestone 2                            |
-| API docs             | Swagger / OpenAPI                                | Milestone 2                            |
-| Cache                | Redis                                            | Milestone 4                            |
-| Messaging            | RabbitMQ                                         | Milestone 7                            |
-| Email                | Nodemailer + MailHog                             | Milestone 10                           |
-| Logging / tracing    | Pino, OpenTelemetry, SigNoz                      | Milestone 11                           |
-| Testing              | Jest + Supertest                                 | throughout, formalised in Milestone 13 |
-| Containers           | Docker + Docker Compose                          | Milestone 14                           |
-| CI                   | GitHub Actions                                   | Milestone 15                           |
+| Concern              | Choice                                           | Introduced in              |
+| -------------------- | ------------------------------------------------ | -------------------------- |
+| Monorepo tooling     | Nx                                               | M1                         |
+| Framework            | NestJS 11                                        | M1                         |
+| Language             | TypeScript (strict)                              | M1                         |
+| Linting / formatting | ESLint (flat config) + Prettier                  | M1                         |
+| Bundling             | webpack via `@nx/webpack`                        | M1                         |
+| Configuration        | `@nestjs/config` + Joi validation                | M1                         |
+| Database             | PostgreSQL 18                                    | M2                         |
+| ORM / migrations     | Sequelize + sequelize-typescript + sequelize-cli | M2                         |
+| Password hashing     | bcrypt (cost 12)                                 | M2                         |
+| Tokens               | JWT (HS256) via `@nestjs/jwt`                    | M2                         |
+| Authentication       | Passport + `passport-jwt` + guard                | M2                         |
+| Request validation   | class-validator / class-transformer              | M2                         |
+| Service-to-service   | HTTP via `@nestjs/axios`                         | M2                         |
+| API docs             | Swagger / OpenAPI                                | M2                         |
+| Money                | `DECIMAL(12,2)`, exposed as an exact string      | M3                         |
+| Cache                | Redis                                            | M4                         |
+| Messaging            | RabbitMQ                                         | M7                         |
+| Email                | Nodemailer + MailHog                             | M10                        |
+| Logging / tracing    | Pino, OpenTelemetry, SigNoz                      | M11                        |
+| Testing              | Jest + Supertest                                 | throughout; formalised M13 |
+| Containers           | Docker + Docker Compose                          | M14                        |
+| CI                   | GitHub Actions                                   | M15                        |
 
 ---
 
@@ -125,52 +131,47 @@ Sequelize appears in exactly one layer. A controller never queries.
 ```text
 ecommerce/
 ├── apps/
-│   ├── api-gateway/                    PUBLIC · port 3000
+│   ├── api-gateway/                  PUBLIC · 3000 · inspector 9229
 │   │   └── src/
-│   │       ├── app/app.module.ts       config + feature modules
-│   │       ├── auth/
-│   │       │   ├── auth.controller.ts  public routes, validated DTOs
-│   │       │   ├── auth-proxy.service.ts  forwards to Auth, maps failures
-│   │       │   └── auth.module.ts      HttpModule baseURL + timeout
+│   │       ├── auth/                 proxy to Auth
+│   │       ├── catalog/              proxy to Product
+│   │       ├── common/upstream-proxy.ts   shared failure mapping
 │   │       ├── config/env.validation.ts
-│   │       └── main.ts                 ValidationPipe + Swagger
+│   │       └── main.ts               ValidationPipe + Swagger
 │   │
-│   └── auth/                           INTERNAL · port 3001 · 127.0.0.1 only
-│       ├── .sequelizerc                absolute paths for sequelize-cli
+│   ├── auth/                         INTERNAL · 3001 · inspector 9230
+│   │   ├── .sequelizerc
+│   │   └── src/
+│   │       ├── auth/                 controller, service, strategy, guard
+│   │       ├── users/                model, repository
+│   │       ├── database/             connection + migrations
+│   │       ├── config/
+│   │       └── main.ts
+│   │
+│   └── product/                      INTERNAL · 3002 · inspector 9231
+│       ├── .sequelizerc
 │       └── src/
-│           ├── app/app.module.ts
-│           ├── auth/
-│           │   ├── auth.controller.ts
-│           │   ├── auth.service.ts     hashing, login, token issuance
-│           │   ├── auth.module.ts      JwtModule.registerAsync
-│           │   ├── jwt.strategy.ts     Passport strategy
-│           │   ├── jwt-auth.guard.ts
-│           │   ├── current-user.decorator.ts
-│           │   └── auth.service.spec.ts
-│           ├── users/
-│           │   ├── user.model.ts       sequelize-typescript model
-│           │   ├── users.repository.ts ONLY place that touches Sequelize
-│           │   └── users.module.ts
-│           ├── database/
-│           │   ├── database.module.ts  connection, synchronize: false
-│           │   ├── sequelize-cli.config.js
-│           │   ├── migrations/
-│           │   │   └── 20260825120000-create-users-table.js
-│           │   └── seeders/
-│           ├── config/env.validation.ts
+│           ├── products/             model, repository, service, controller
+│           ├── categories/           model, repository, service, controller
+│           ├── common/domain-errors.ts
+│           ├── database/             connection + migrations
+│           ├── config/
 │           └── main.ts
 │
 ├── libs/
-│   └── contracts/                      @ecommerce/contracts · type:lib
-│       └── src/lib/auth/               DTOs shared by gateway and auth
+│   └── contracts/                    @ecommerce/contracts · type:lib
+│       └── src/lib/
+│           ├── auth/                 register, login, tokens, roles
+│           ├── catalog/              product, category, query DTOs
+│           └── common/               pagination envelope
 │
-├── postman/                            collection + local environment
-├── tools/free-ports.mjs                kills orphaned dev servers
-├── .env.example                        committed template, no real secrets
-├── .env                                local values, git-ignored
-├── eslint.config.mjs                   module boundary rules
-├── nx.json · tsconfig.base.json · package.json
-└── README.md
+├── docs/PROJECT-PLAN.md              milestones, progress, deferred items
+├── postman/                          collection + local environment
+├── tools/free-ports.mjs              kills orphaned dev servers
+├── .env.example                      committed template, no real secrets
+├── .env                              local values, git-ignored
+├── eslint.config.mjs                 module boundary rules
+└── nx.json · tsconfig.base.json · package.json
 ```
 
 ---
@@ -179,33 +180,25 @@ ecommerce/
 
 Prerequisites: Node.js 20+, npm 10+, PostgreSQL 13+ running locally.
 
-**1. Install dependencies**
-
 ```bash
 npm install
 ```
-
-**2. Create the environment file**
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in `AUTH_DB_PASSWORD` and generate a signing key:
+Fill in the two `*_DB_PASSWORD` values and generate a signing key:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-**3. Create the database and role** — see the next section.
-
-**4. Run migrations**
+Create the databases (next section), then:
 
 ```bash
-npm run auth:migrate
+npm run db:migrate
 ```
-
-**5. Start both services**
 
 ```bash
 npm start
@@ -220,54 +213,54 @@ npm start
 Every PostgreSQL object this project creates is prefixed **`ecommerce_`** —
 both the database and the login role:
 
-| Service          | Database                 | Owning role                   |
-| ---------------- | ------------------------ | ----------------------------- |
-| Auth             | `ecommerce_auth_db`      | `ecommerce_auth_service`      |
-| Product _(M3)_   | `ecommerce_product_db`   | `ecommerce_product_service`   |
-| Inventory _(M5)_ | `ecommerce_inventory_db` | `ecommerce_inventory_service` |
-| Cart _(M6)_      | `ecommerce_cart_db`      | `ecommerce_cart_service`      |
-| Order _(M8)_     | `ecommerce_order_db`     | `ecommerce_order_service`     |
-| Payment _(M9)_   | `ecommerce_payment_db`   | `ecommerce_payment_service`   |
+| Service          | Database                 | Owning role                   | Status |
+| ---------------- | ------------------------ | ----------------------------- | ------ |
+| Auth             | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅     |
+| Product          | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅     |
+| Inventory _(M5)_ | `ecommerce_inventory_db` | `ecommerce_inventory_service` | —      |
+| Cart _(M6)_      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | —      |
+| Order _(M8)_     | `ecommerce_order_db`     | `ecommerce_order_service`     | —      |
+| Payment _(M9)_   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | —      |
 
 Databases are namespaced per cluster, but **roles in PostgreSQL are
-cluster-wide**. A bare `auth_service` role would share a namespace with every
-other project on the same local server, so the prefix is what keeps `\du`
-readable and a misplaced `GRANT` obvious.
+cluster-wide**. A bare `auth_service` would share a namespace with every other
+project on the same server, so the prefix is what keeps `\du` readable and a
+misplaced `GRANT` obvious.
 
 Environment _variable_ names keep their own per-service prefix (`AUTH_DB_*`,
-later `PRODUCT_DB_*`) — only the PostgreSQL object names carry `ecommerce_`.
+`PRODUCT_DB_*`) — only the PostgreSQL object names carry `ecommerce_`.
 
 ### Creating a service database
 
-The Auth Service owns `ecommerce_auth_db` and connects as
-`ecommerce_auth_service`. That role has no rights over any other service's
-database — the same separation Docker or a managed Postgres would give you,
-done with roles instead.
-
-Create the role and database once, from `psql` as a superuser:
+As a superuser, once per service:
 
 ```sql
-CREATE ROLE ecommerce_auth_service WITH LOGIN PASSWORD 'your-password-from-dotenv';
-CREATE DATABASE ecommerce_auth_db OWNER ecommerce_auth_service;
+CREATE ROLE ecommerce_product_service WITH LOGIN PASSWORD 'your-password-from-dotenv';
+CREATE DATABASE ecommerce_product_db OWNER ecommerce_product_service;
 ```
 
+Each role owns exactly one database and has no rights over any other — the
+same isolation Docker or a managed Postgres would give, done with roles.
+
+### Migrations
+
 **Schema changes only ever happen through migrations.** `synchronize` is
-hardcoded to `false` in `database.module.ts` with no environment toggle, so
+hardcoded `false` in every `database.module.ts` with no environment toggle, so
 Sequelize is never permitted to issue DDL. The schema in any environment is
 exactly the sum of the migration files in git.
 
-| Command                                                   | What it does                        |
-| --------------------------------------------------------- | ----------------------------------- |
-| `npm run auth:migrate`                                    | Apply every pending migration       |
-| `npm run auth:migrate:status`                             | Show which migrations have run      |
-| `npm run auth:migrate:undo`                               | Roll back the most recent migration |
-| `npm run auth:migration:generate -- --name add-something` | Scaffold a new migration            |
+| Command                                                      | What it does                                   |
+| ------------------------------------------------------------ | ---------------------------------------------- |
+| `npm run db:migrate`                                         | Apply pending migrations for **every** service |
+| `npm run auth:migrate` / `product:migrate`                   | One service                                    |
+| `npm run auth:migrate:status` / `product:migrate:status`     | What has run                                   |
+| `npm run auth:migrate:undo` / `product:migrate:undo`         | Roll back the last one                         |
+| `npm run product:migration:generate -- --name add-something` | Scaffold a new one                             |
 
-Applied migrations are recorded in the `SequelizeMeta` table. Every migration
-in this project wraps its statements in a single transaction, because
-PostgreSQL supports transactional DDL and sequelize-cli does not add one for
-you — without it a failure halfway through leaves a half-applied schema that
-`SequelizeMeta` does not know about.
+Applied migrations are recorded in each database's `SequelizeMeta` table.
+Every migration here wraps its statements in a single transaction — PostgreSQL
+supports transactional DDL and sequelize-cli does not add one for you, so
+without it a mid-way failure leaves a schema `SequelizeMeta` has no record of.
 
 Models and migrations are **separate concerns**, kept in sync by hand. The
 migration is the authoritative history; the model is one process's view of it.
@@ -279,8 +272,13 @@ If they disagree, the migration is right.
 
 Swagger UI:
 
-- Gateway (public): <http://localhost:3000/docs>
-- Auth Service (internal): <http://127.0.0.1:3001/docs>
+|                    |                              |
+| ------------------ | ---------------------------- |
+| Gateway (public)   | <http://localhost:3000/docs> |
+| Auth (internal)    | <http://127.0.0.1:3001/docs> |
+| Product (internal) | <http://127.0.0.1:3002/docs> |
+
+### Auth
 
 | Method | Path                 | Auth   | Returns                   |
 | ------ | -------------------- | ------ | ------------------------- |
@@ -288,25 +286,69 @@ Swagger UI:
 | `POST` | `/api/auth/login`    | —      | 200 · user + access token |
 | `GET`  | `/api/auth/me`       | Bearer | 200 · user profile        |
 
-Status codes you should expect:
+### Catalogue
 
-| Code | When                                                                 |
-| ---- | -------------------------------------------------------------------- |
-| 400  | Body failed validation, or contained an unknown property             |
-| 401  | Missing, expired, tampered or unknown-subject token; bad credentials |
-| 409  | Email already registered                                             |
-| 503  | Auth Service is not running                                          |
-| 504  | Auth Service did not answer within `HTTP_CLIENT_TIMEOUT_MS`          |
+⚠️ **Write endpoints are currently unauthenticated** — see [Known gaps](#known-gaps).
 
-Example:
+| Method   | Path                  | Returns                         |
+| -------- | --------------------- | ------------------------------- |
+| `GET`    | `/api/products`       | 200 · paginated list            |
+| `GET`    | `/api/products/:id`   | 200 · product with its category |
+| `POST`   | `/api/products`       | 201 · created product           |
+| `PATCH`  | `/api/products/:id`   | 200 · updated product           |
+| `DELETE` | `/api/products/:id`   | 204 · soft-deleted              |
+| `GET`    | `/api/categories`     | 200 · list                      |
+| `GET`    | `/api/categories/:id` | 200 · category                  |
+| `POST`   | `/api/categories`     | 201 · created category          |
+| `PATCH`  | `/api/categories/:id` | 200 · updated category          |
+| `DELETE` | `/api/categories/:id` | 204 · soft-deleted              |
+
+### Listing query parameters
+
+| Parameter               | Values                                 | Notes                                              |
+| ----------------------- | -------------------------------------- | -------------------------------------------------- |
+| `page`                  | ≥ 1, default 1                         | Offset pagination                                  |
+| `limit`                 | 1–100, default 20                      | Capped, so a client cannot request the whole table |
+| `search`                | text                                   | Case-insensitive substring on name and SKU         |
+| `categoryId`            | uuid                                   |                                                    |
+| `status`                | `DRAFT` `ACTIVE` `ARCHIVED`            |                                                    |
+| `minPrice` / `maxPrice` | number                                 | Inverted range is a 400, not an empty page         |
+| `sortBy`                | `name` `price` `createdAt` `updatedAt` | Allow-list — `ORDER BY` cannot be parameterised    |
+| `sortOrder`             | `asc` `desc`                           |                                                    |
 
 ```bash
-curl -s -X POST http://localhost:3000/api/auth/register -H "Content-Type: application/json" -d '{"email":"ada@example.com","password":"correct-horse-Battery9","firstName":"Ada","lastName":"Lovelace"}'
+curl -s "http://localhost:3000/api/products?search=thinkpad&status=ACTIVE&minPrice=500&sortBy=price&sortOrder=asc&page=1&limit=10"
 ```
 
-```bash
-curl -s http://localhost:3000/api/auth/me -H "Authorization: Bearer PASTE_TOKEN_HERE"
+Responses are enveloped:
+
+```json
+{
+  "items": [{ "id": "...", "name": "...", "price": "1899.00" }],
+  "meta": {
+    "page": 1,
+    "limit": 20,
+    "total": 137,
+    "totalPages": 7,
+    "hasNext": true,
+    "hasPrevious": false
+  }
+}
 ```
+
+`price` is a **string**. The column is `DECIMAL(12,2)`; JavaScript numbers are
+IEEE-754 doubles and cannot hold 19.99 exactly. Do not parse it as a float to
+do money arithmetic.
+
+### Status codes
+
+| Code      | When                                                                             |
+| --------- | -------------------------------------------------------------------------------- |
+| 400       | Validation failed, unknown property, bad UUID, inverted price range, empty patch |
+| 401       | Missing, expired, tampered token; bad credentials                                |
+| 404       | Product or category not found                                                    |
+| 409       | Email, SKU, category name or slug already in use; category still has products    |
+| 503 / 504 | Downstream service unavailable / timed out                                       |
 
 ---
 
@@ -320,179 +362,162 @@ Two files in [`postman/`](postman), both committed:
 | `ecommerce.local.postman_environment.json` | URLs, ports and test credentials           |
 
 **Import both**: Postman → _Import_ → drag both files in. Then select
-**`ecommerce · local`** in the environment picker (top right) — a collection-level
+**`ecommerce · local`** in the environment picker — a collection-level
 pre-request script fails loudly with a clear message if you forget.
 
-The collection is kept in step with the API as milestones land. It is
-organised so that the failures are as instructive as the successes:
-
-| Folder                      | Contents                                                                                                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `1 · Happy path`            | Register → Login → Me. Chains state, re-runnable.                                                                                                           |
-| `2 · Validation & security` | Seven requests that are _supposed_ to fail: malformed body, mass assignment, duplicate email, wrong password, unknown email, missing token, tampered token. |
-| `3 · Auth Service directly` | The same calls on `:3001`, bypassing the gateway.                                                                                                           |
-| `4 · Downstream failure`    | Requires the Auth Service to be stopped on purpose.                                                                                                         |
+| Folder                      | Contents                                                    |
+| --------------------------- | ----------------------------------------------------------- |
+| `1 · Happy path`            | Register → Login → Me. Chains state, re-runnable.           |
+| `2 · Validation & security` | Seven requests that are _supposed_ to fail.                 |
+| `3 · Auth Service directly` | The same calls on `:3001`, bypassing the gateway.           |
+| `4 · Downstream failure`    | Requires a service stopped on purpose.                      |
+| `5 · Catalogue`             | Category → product → list → filter → sort → patch → delete. |
 
 Every request carries assertions, so **Run collection** doubles as a smoke
-test. Folder 1's register step generates a unique `ada+<timestamp>@example.com`
-each run, so it never trips the unique index.
-
-Variables that hold a credential (`password`, `accessToken`) are typed
-`secret`, so Postman masks them in the UI. The environment file contains **no
-production data and no signing key** — `JWT_ACCESS_SECRET` lives only in
-`.env`, which is git-ignored.
+test.
 
 ---
 
 ## Everyday commands
 
-| Command                 | What it does                                   |
-| ----------------------- | ---------------------------------------------- |
-| `npm start`             | Serve gateway **and** auth together            |
-| `npm run start:gateway` | Serve the gateway only                         |
-| `npm run start:auth`    | Serve the auth service only                    |
-| `npm run stop`          | Kill anything left holding 3000/3001/9229/9230 |
-| `npm run build`         | Build every project into `dist/`               |
-| `npm run lint`          | ESLint across every project                    |
-| `npm test`              | Jest across every project                      |
-| `npm run format`        | Rewrite files with Prettier                    |
-| `npm run graph`         | Open the interactive Nx project graph          |
-| `npx nx show projects`  | List every project Nx knows about              |
+| Command                                                  | What it does                                     |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| `npm start`                                              | Serve all three services, with streamed logs     |
+| `npm run start:gateway` / `start:auth` / `start:product` | One service                                      |
+| `npm run stop`                                           | Kill anything left holding 3000–3002 / 9229–9231 |
+| `npm run db:migrate`                                     | Migrate every service's database                 |
+| `npm run build`                                          | Build every project into `dist/`                 |
+| `npm run lint`                                           | ESLint across every project                      |
+| `npm test`                                               | Jest across every project                        |
+| `npm run format`                                         | Rewrite files with Prettier                      |
+| `npm run graph`                                          | Open the interactive Nx project graph            |
 
 ---
 
 ## Environment variables
 
 Each service validates **its own** variables with Joi at startup and refuses to
-boot if any are missing or malformed. Database variables are prefixed per
-service (`AUTH_DB_*`) because every service owns its own database and an
-unprefixed `DB_HOST` would collide as soon as the second one appears.
+boot if any are missing or malformed.
 
-| Variable                 | Service | Default       | Description                             |
-| ------------------------ | ------- | ------------- | --------------------------------------- |
-| `NODE_ENV`               | both    | `development` | `development` \| `test` \| `production` |
-| `API_GATEWAY_PORT`       | gateway | `3000`        | Public listening port                   |
-| `API_GLOBAL_PREFIX`      | gateway | `api`         | Prefix on all gateway routes            |
-| `AUTH_SERVICE_URL`       | gateway | _required_    | Where to forward auth calls             |
-| `HTTP_CLIENT_TIMEOUT_MS` | gateway | `5000`        | Deadline for outbound calls             |
-| `AUTH_SERVICE_PORT`      | auth    | `3001`        | Internal listening port                 |
-| `AUTH_DB_HOST`           | auth    | _required_    | PostgreSQL host                         |
-| `AUTH_DB_PORT`           | auth    | _required_    | PostgreSQL port                         |
-| `AUTH_DB_USERNAME`       | auth    | _required_    | Role that owns `ecommerce_auth_db`      |
-| `AUTH_DB_PASSWORD`       | auth    | _required_    | Role password                           |
-| `AUTH_DB_DATABASE`       | auth    | _required_    | Database name                           |
-| `AUTH_DB_LOGGING`        | auth    | `false`       | Log emitted SQL — off in production     |
-| `AUTH_DB_SSL`            | auth    | `false`       | Must be true off-loopback               |
-| `JWT_ACCESS_SECRET`      | auth    | _required_    | HS256 key, min 32 characters            |
-| `JWT_ACCESS_TTL_SECONDS` | auth    | `900`         | Access token lifetime                   |
-| `BCRYPT_COST`            | auth    | `12`          | bcrypt work factor (10–15)              |
+| Variable                 | Service | Default       | Description                              |
+| ------------------------ | ------- | ------------- | ---------------------------------------- |
+| `NODE_ENV`               | all     | `development` | `development` \| `test` \| `production`  |
+| `API_GATEWAY_PORT`       | gateway | `3000`        | Public listening port                    |
+| `API_GLOBAL_PREFIX`      | gateway | `api`         | Prefix on all gateway routes             |
+| `AUTH_SERVICE_URL`       | gateway | _required_    | Where to forward auth calls              |
+| `PRODUCT_SERVICE_URL`    | gateway | _required_    | Where to forward catalogue calls         |
+| `HTTP_CLIENT_TIMEOUT_MS` | gateway | `5000`        | Deadline for outbound calls              |
+| `AUTH_SERVICE_PORT`      | auth    | `3001`        | Internal listening port                  |
+| `AUTH_DB_*`              | auth    | _required_    | Host, port, username, password, database |
+| `AUTH_DB_LOGGING`        | auth    | `false`       | Log emitted SQL — off in production      |
+| `AUTH_DB_SSL`            | auth    | `false`       | Must be true off-loopback                |
+| `JWT_ACCESS_SECRET`      | auth    | _required_    | HS256 key, min 32 characters             |
+| `JWT_ACCESS_TTL_SECONDS` | auth    | `900`         | Access token lifetime                    |
+| `BCRYPT_COST`            | auth    | `12`          | bcrypt work factor (10–15)               |
+| `PRODUCT_SERVICE_PORT`   | product | `3002`        | Internal listening port                  |
+| `PRODUCT_DB_*`           | product | _required_    | Host, port, username, password, database |
+| `PRODUCT_DB_LOGGING`     | product | `false`       | Log emitted SQL                          |
+| `PRODUCT_DB_SSL`         | product | `false`       | Must be true off-loopback                |
 
 Rules:
 
-- `.env.example` is committed and documents every variable. It contains no
-  real values.
+- `.env.example` is committed and documents every variable. No real values.
 - `.env` and `.env.local` are git-ignored.
-- Bind parameter logging is hardcoded off, so hashes and personal data never
+- Bind-parameter logging is hardcoded off, so hashes and personal data never
   reach the application log.
-- Real secrets belong in a secret manager. A `.env` file is a local-development
-  convenience, not a production mechanism.
+- Real secrets belong in a secret manager. A `.env` file is a
+  local-development convenience, not a production mechanism.
 
 ---
 
 ## Architecture decisions
 
-**Monorepo (Nx) over polyrepo.** Nine services sharing contracts, config
-conventions and lint rules would otherwise mean nine repositories and nine CI
-pipelines. Nx keeps one repository and an accurate project graph, so only
-affected projects rebuild. The cost is that boundaries must be enforced with
-tooling rather than by physics.
+Full list with rationale in [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md). The
+ones that shape day-to-day work:
 
-**Project boundary tags.** Apps are tagged `type:app`, libraries `type:lib`.
-`eslint.config.mjs` enforces that apps may only depend on libraries and that
-nothing may depend on an app. An attempt to import `apps/auth` from
-`apps/api-gateway` fails lint.
+**Monorepo with enforced boundaries.** Apps are tagged `type:app`, libraries
+`type:lib`. ESLint rejects an app importing another app. Without that rule a
+monorepo becomes a distributed monolith.
 
-**`libs/contracts` exists; shared models never will.** The gateway and the auth
-service exchange the same request and response bodies, so those DTOs are a
-genuine shared concern and live in one place. The `User` Sequelize model is
-the opposite — it is the Auth Service's private persistence detail, and sharing
-it is how a microservice repository becomes a distributed monolith.
+**`libs/contracts` holds DTOs; models are never shared.** The message shape
+between two services is a genuine shared concern. A Sequelize model is a
+service's private persistence detail.
 
-**API Gateway as a NestJS app, not nginx.** A reverse proxy forwards bytes
-quickly and understands nothing about the API. The gateway validates bodies,
-maps downstream failures to honest status codes and will later aggregate
-responses, apply rate limiting and attach correlation IDs. In production the
-two stack: a load balancer terminates TLS in front of this.
+**API Gateway as a NestJS app, not nginx.** A reverse proxy forwards bytes and
+understands nothing about the API. The gateway validates bodies and maps
+downstream failures to honest status codes: pass-through, 503, 504, 502.
 
-**HTTP between services, not RabbitMQ.** "Log me in" is genuinely synchronous —
-the caller cannot proceed without an answer. Messaging arrives when there is
-work that truly does not need an answer now (Milestone 7).
+**HTTP between services, not RabbitMQ.** "Log me in" and "fetch this product"
+are genuinely synchronous. Messaging arrives for work that does not need an
+answer now (M7).
 
-**JWT with a 15-minute lifetime, and a database lookup per request.** A signed
-token cannot be revoked before it expires, so the lifetime is the blast radius
-of a stolen one. `JwtStrategy.validate()` re-reads the user on every request so
-that disabling an account takes effect immediately, at the cost of one
-primary-key SELECT — precisely the kind of hot, rarely-changing read Redis will
-absorb in Milestone 4.
+**Money is `DECIMAL(12,2)`, never a float, and crosses the wire as a string.**
+0.1 + 0.2 !== 0.3 in IEEE-754, and rounding errors in money reach an
+accountant before they reach an engineer.
 
-**HS256 today, RS256 when a second verifier appears.** One shared secret is
-correct while a single service both signs and verifies. The moment another
-service must verify tokens itself, it would need the signing key — and a key
-that verifies can also mint. That is the trigger to switch to asymmetric keys.
+**Constraints live in the database.** Unique indexes, foreign keys and CHECK
+constraints hold for every writer — this service, psql, a future data-fix
+script. Application validation only holds for callers that go through the
+application.
 
-**Uniqueness is enforced by the database, not by a lookup.** `UsersRepository`
-does not SELECT before INSERT. Two concurrent registrations would both pass
-such a check and both insert; only the unique index makes the second one fail.
-The repository catches the constraint violation and translates it.
+**Uniqueness by unique index, never check-then-insert.** Two concurrent writes
+both pass a pre-check and both insert. Only the index is atomic.
 
-**`synchronize: false`, hardcoded.** No environment toggle. Sequelize is never
-allowed to emit DDL, so the migration history cannot become a lie.
+**Soft delete everywhere, `ON DELETE RESTRICT` for real deletes.** Order
+history will reference products long after they stop being sold. Deleting a
+category must not silently delete its products.
+
+**`synchronize: false`, hardcoded.** No environment toggle. Sequelize may
+never emit DDL, so the migration history cannot become a lie.
 
 **`useDefineForClassFields: false`.** Required for decorator-based ORMs. With
-ES2022 class-field semantics, a declared field is defined on the instance and
-shadows the accessor sequelize-typescript installs, so every property silently
-reads `undefined`.
+ES2022 class-field semantics, a declared field shadows the accessor
+sequelize-typescript installs and every property silently reads `undefined`.
 
 ---
 
-## Milestone progress
+## Known gaps
 
-- [x] **1 — Nx workspace and project foundation**
-- [x] **2 — API Gateway + Auth foundation** (PostgreSQL, Sequelize, JWT, Swagger)
-- [ ] 3 — Product Service (CRUD, pagination, filtering, sorting)
-- [ ] 4 — Redis and caching
-- [ ] 5 — Inventory Service (transactions, locking, concurrency)
-- [ ] 6 — Cart Service
-- [ ] 7 — RabbitMQ messaging
-- [ ] 8 — Order Service and distributed workflow (Saga)
-- [ ] 9 — Payment Service
-- [ ] 10 — Notification Service
-- [ ] 11 — Observability (Pino, OpenTelemetry, SigNoz)
-- [ ] 12 — Production hardening
-- [ ] 13 — Testing
-- [ ] 14 — Docker and local infrastructure
-- [ ] 15 — CI/CD
+Stated plainly, tracked with triggers in
+[docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md):
 
-Deferred deliberately, with a trigger rather than a vague "later": refresh
-tokens and logout, RBAC role guards, a global exception filter with the
-project's standard error envelope, correlation IDs, rate limiting, Helmet and
-CORS, and health checks.
+1. **Catalogue write endpoints are unauthenticated.** Anyone who can reach the
+   gateway can create, edit and delete products. Deliberate — closing it needs
+   the RS256 decision — but this stack **must not be exposed beyond
+   localhost**.
+2. **No rate limiting.** `POST /api/auth/login` is bounded only by bcrypt's
+   cost.
+3. **No RBAC**, though `role` is already a claim and a column.
+4. **No audit logging** of authentication or catalogue mutations.
+5. **No correlation IDs** — a request cannot yet be traced across services.
+6. **`.env` holds development secrets** that have appeared in a terminal
+   transcript. Rotate before any shared environment.
 
 ---
 
 ## Troubleshooting
 
-**`Config validation error: ...` on startup** — a variable in `.env` is missing
-or malformed. The message names the key. This is the validation working.
+**`npm start` looks like it hangs** — it is _supposed_ to keep running:
+`serve` is a continuous target and only exits on Ctrl+C. A cold run rebuilds
+every app with webpack (~60–90s); a warm run is ~10–15s. You are up when you
+see three `listening on ...` lines and two `connected to "ecommerce_*_db"`
+lines.
 
-**`503 Auth service is unavailable`** — the gateway is up but the Auth Service
-is not. Start it with `npm run start:auth`, or use `npm start` for both.
+**`npm start` fails or stalls right after you stopped it** — stopping the
+parent does not reliably kill the child node processes on Windows, so the old
+servers still hold the ports. Run `npm run stop`, then start again.
 
-**`SequelizeConnectionError: password authentication failed`** — `AUTH_DB_*` in
-`.env` does not match the role you created in PostgreSQL.
+**`Config validation error: ...`** — a variable in `.env` is missing or
+malformed. The message names the key. This is the validation working.
 
-**`relation "users" does not exist`** — migrations have not been applied. Run
-`npm run auth:migrate`.
+**`503 <service> is unavailable`** — the gateway is up but a downstream
+service is not. `npm start` runs all three.
+
+**`SequelizeConnectionError: password authentication failed`** — the `*_DB_*`
+values in `.env` do not match the role in PostgreSQL. Note that PostgreSQL
+reports a _nonexistent_ role with this same message.
+
+**`relation "products" does not exist`** — run `npm run db:migrate`.
 
 **`Unknown authentication strategy "jwt"`** — `JwtStrategy` is missing from a
 module's `providers`. Instantiation is what registers it with Passport.
@@ -501,25 +526,12 @@ module's `providers`. Instantiation is what registers it with Passport.
 somewhere. It must be false for sequelize-typescript.
 
 **`Projects cannot be imported by a relative or absolute path`** — a project
-imported across a boundary. Fix the dependency direction; do not relax the rule.
+imported across a boundary. Fix the dependency direction; do not relax the
+rule.
 
-**`npm start` looks like it hangs** — it is _supposed_ to keep running: `serve`
-is a continuous target and only exits on Ctrl+C. Two things make it look worse
-than it is. First, `nx run-many` with several tasks defaults to a live task-list
-view that hides each app's stdout — `--output-style=stream` (already in the
-script) restores the interleaved, project-prefixed logs. Second, a cold run
-rebuilds both apps with webpack, ~60–90s; a warm run is ~10–15s because Nx
-replays the cached build. You have both services once you see two `listening
-on ...` lines and one `connected to "ecommerce_auth_db"` line.
-
-**`npm start` fails or stalls immediately after you stopped it** — stopping the
-parent does not reliably kill the child node processes on Windows, so the old
-servers are still holding the ports. Run `npm run stop`, then start again.
-
-**`Starting inspector on localhost:9229 failed: address already in use`** — two
-services tried to attach a Node debugger to the same port, and the second one
-never boots. Each serve target pins its own inspector port in `project.json`
-(gateway 9229, auth 9230); a new service needs the next free one.
+**`Starting inspector on localhost:9229 failed: address already in use`** —
+two services tried to attach a Node debugger to the same port. Each serve
+target pins its own in `project.json` (3000→9229, 3001→9230, 3002→9231).
 
 **Postman: `Missing environment variable(s)`** — the `ecommerce · local`
 environment is not selected in the top-right picker.
