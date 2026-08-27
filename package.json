@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "nx run-many -t serve -p api-gateway auth",
+    "start": "nx run-many -t serve -p api-gateway auth --output-style=stream",
     "start:gateway": "nx serve api-gateway",
     "start:auth": "nx serve auth",
+    "stop": "node tools/free-ports.mjs",
     "build": "nx run-many -t build",
     "lint": "nx run-many -t lint",
     "test": "nx run-many -t test",

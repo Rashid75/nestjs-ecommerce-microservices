@@ -76,9 +76,10 @@ another service's tables directly; they talk over REST or RabbitMQ.
 └──────────┬───────────┘
            │ Sequelize
            ▼
-┌──────────────────────┐
-│  PostgreSQL auth_db  │  owner: auth_service · schema from migrations only
-└──────────────────────┘
+┌───────────────────────────┐
+│ PostgreSQL                │  owner: ecommerce_auth_service
+│   ecommerce_auth_db       │  schema from migrations only
+└───────────────────────────┘
 ```
 
 Inside the Auth Service the request path is fixed:
@@ -164,6 +165,7 @@ ecommerce/
 │       └── src/lib/auth/               DTOs shared by gateway and auth
 │
 ├── postman/                            collection + local environment
+├── tools/free-ports.mjs                kills orphaned dev servers
 ├── .env.example                        committed template, no real secrets
 ├── .env                                local values, git-ignored
 ├── eslint.config.mjs                   module boundary rules
@@ -213,15 +215,40 @@ npm start
 
 ## Database and migrations
 
-The Auth Service owns `auth_db` and connects as the `auth_service` role. That
-role has no rights over any other service's database — the same separation
-Docker or a managed Postgres would give you, done with roles instead.
+### Naming convention
+
+Every PostgreSQL object this project creates is prefixed **`ecommerce_`** —
+both the database and the login role:
+
+| Service          | Database                 | Owning role                   |
+| ---------------- | ------------------------ | ----------------------------- |
+| Auth             | `ecommerce_auth_db`      | `ecommerce_auth_service`      |
+| Product _(M3)_   | `ecommerce_product_db`   | `ecommerce_product_service`   |
+| Inventory _(M5)_ | `ecommerce_inventory_db` | `ecommerce_inventory_service` |
+| Cart _(M6)_      | `ecommerce_cart_db`      | `ecommerce_cart_service`      |
+| Order _(M8)_     | `ecommerce_order_db`     | `ecommerce_order_service`     |
+| Payment _(M9)_   | `ecommerce_payment_db`   | `ecommerce_payment_service`   |
+
+Databases are namespaced per cluster, but **roles in PostgreSQL are
+cluster-wide**. A bare `auth_service` role would share a namespace with every
+other project on the same local server, so the prefix is what keeps `\du`
+readable and a misplaced `GRANT` obvious.
+
+Environment _variable_ names keep their own per-service prefix (`AUTH_DB_*`,
+later `PRODUCT_DB_*`) — only the PostgreSQL object names carry `ecommerce_`.
+
+### Creating a service database
+
+The Auth Service owns `ecommerce_auth_db` and connects as
+`ecommerce_auth_service`. That role has no rights over any other service's
+database — the same separation Docker or a managed Postgres would give you,
+done with roles instead.
 
 Create the role and database once, from `psql` as a superuser:
 
 ```sql
-CREATE ROLE auth_service WITH LOGIN PASSWORD 'your-password-from-dotenv';
-CREATE DATABASE auth_db OWNER auth_service;
+CREATE ROLE ecommerce_auth_service WITH LOGIN PASSWORD 'your-password-from-dotenv';
+CREATE DATABASE ecommerce_auth_db OWNER ecommerce_auth_service;
 ```
 
 **Schema changes only ever happen through migrations.** `synchronize` is
@@ -319,17 +346,18 @@ production data and no signing key** — `JWT_ACCESS_SECRET` lives only in
 
 ## Everyday commands
 
-| Command                 | What it does                          |
-| ----------------------- | ------------------------------------- |
-| `npm start`             | Serve gateway **and** auth together   |
-| `npm run start:gateway` | Serve the gateway only                |
-| `npm run start:auth`    | Serve the auth service only           |
-| `npm run build`         | Build every project into `dist/`      |
-| `npm run lint`          | ESLint across every project           |
-| `npm test`              | Jest across every project             |
-| `npm run format`        | Rewrite files with Prettier           |
-| `npm run graph`         | Open the interactive Nx project graph |
-| `npx nx show projects`  | List every project Nx knows about     |
+| Command                 | What it does                                   |
+| ----------------------- | ---------------------------------------------- |
+| `npm start`             | Serve gateway **and** auth together            |
+| `npm run start:gateway` | Serve the gateway only                         |
+| `npm run start:auth`    | Serve the auth service only                    |
+| `npm run stop`          | Kill anything left holding 3000/3001/9229/9230 |
+| `npm run build`         | Build every project into `dist/`               |
+| `npm run lint`          | ESLint across every project                    |
+| `npm test`              | Jest across every project                      |
+| `npm run format`        | Rewrite files with Prettier                    |
+| `npm run graph`         | Open the interactive Nx project graph          |
+| `npx nx show projects`  | List every project Nx knows about              |
 
 ---
 
@@ -350,7 +378,7 @@ unprefixed `DB_HOST` would collide as soon as the second one appears.
 | `AUTH_SERVICE_PORT`      | auth    | `3001`        | Internal listening port                 |
 | `AUTH_DB_HOST`           | auth    | _required_    | PostgreSQL host                         |
 | `AUTH_DB_PORT`           | auth    | _required_    | PostgreSQL port                         |
-| `AUTH_DB_USERNAME`       | auth    | _required_    | Role that owns `auth_db`                |
+| `AUTH_DB_USERNAME`       | auth    | _required_    | Role that owns `ecommerce_auth_db`      |
 | `AUTH_DB_PASSWORD`       | auth    | _required_    | Role password                           |
 | `AUTH_DB_DATABASE`       | auth    | _required_    | Database name                           |
 | `AUTH_DB_LOGGING`        | auth    | `false`       | Log emitted SQL — off in production     |
@@ -474,6 +502,19 @@ somewhere. It must be false for sequelize-typescript.
 
 **`Projects cannot be imported by a relative or absolute path`** — a project
 imported across a boundary. Fix the dependency direction; do not relax the rule.
+
+**`npm start` looks like it hangs** — it is _supposed_ to keep running: `serve`
+is a continuous target and only exits on Ctrl+C. Two things make it look worse
+than it is. First, `nx run-many` with several tasks defaults to a live task-list
+view that hides each app's stdout — `--output-style=stream` (already in the
+script) restores the interleaved, project-prefixed logs. Second, a cold run
+rebuilds both apps with webpack, ~60–90s; a warm run is ~10–15s because Nx
+replays the cached build. You have both services once you see two `listening
+on ...` lines and one `connected to "ecommerce_auth_db"` line.
+
+**`npm start` fails or stalls immediately after you stopped it** — stopping the
+parent does not reliably kill the child node processes on Windows, so the old
+servers are still holding the ports. Run `npm run stop`, then start again.
 
 **`Starting inspector on localhost:9229 failed: address already in use`** — two
 services tried to attach a Node debugger to the same port, and the second one
