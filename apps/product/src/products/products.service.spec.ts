@@ -13,6 +13,7 @@ import {
   DuplicateFieldError,
   RelatedRecordNotFoundError,
 } from '../common/domain-errors';
+import type { ProductsCacheService } from './products-cache.service';
 import { ProductRecord, ProductsRepository } from './products.repository';
 import { ProductsService } from './products.service';
 
@@ -44,8 +45,41 @@ function makeRepo(): RepoFake {
   };
 }
 
-function makeService(repo: RepoFake): ProductsService {
-  return new ProductsService(repo as unknown as ProductsRepository);
+/**
+ * A pass-through cache: always misses, always calls the loader.
+ *
+ * That is the correct default for these tests. They are about the SERVICE's
+ * behaviour — money conversion, patch construction, error translation — and
+ * a fake that returned cached values would hide bugs in exactly the code
+ * under test. Cache behaviour itself is tested separately, against its own
+ * fake Redis, in products-cache.service.spec.ts.
+ */
+function makeCache(): { fake: ProductsCacheService; invalidated: string[] } {
+  const invalidated: string[] = [];
+  const fake = {
+    getProduct: async (_id: string, load: () => Promise<unknown>) => ({
+      value: await load(),
+      hit: false,
+    }),
+    getList: async (_q: unknown, load: () => Promise<unknown>) => ({
+      value: await load(),
+      hit: false,
+    }),
+    invalidateProduct: async (id: string) => {
+      invalidated.push(`product:${id}`);
+    },
+    invalidateLists: async () => {
+      invalidated.push('lists');
+    },
+  } as unknown as ProductsCacheService;
+  return { fake, invalidated };
+}
+
+function makeService(
+  repo: RepoFake,
+  cache: ProductsCacheService = makeCache().fake,
+): ProductsService {
+  return new ProductsService(repo as unknown as ProductsRepository, cache);
 }
 
 function makeProduct(overrides: Partial<ProductRecord> = {}): ProductRecord {
@@ -189,7 +223,7 @@ describe('ProductsService', () => {
         makeQuery({ page: 2, limit: 20 }),
       );
 
-      expect(result.meta).toEqual({
+      expect(result.data.meta).toEqual({
         page: 2,
         limit: 20,
         total: 137,
@@ -205,9 +239,9 @@ describe('ProductsService', () => {
 
       const result = await makeService(repo).findAll(makeQuery());
 
-      expect(result.items).toEqual([]);
-      expect(result.meta.totalPages).toBe(0);
-      expect(result.meta.hasNext).toBe(false);
+      expect(result.data.items).toEqual([]);
+      expect(result.data.meta.totalPages).toBe(0);
+      expect(result.data.meta.hasNext).toBe(false);
     });
 
     it('rejects an inverted price range instead of returning an empty page', async () => {
@@ -217,6 +251,70 @@ describe('ProductsService', () => {
         makeService(repo).findAll(makeQuery({ minPrice: 500, maxPrice: 100 })),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(repo.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cache invalidation', () => {
+    it('invalidates list pages after a create', async () => {
+      const repo = makeRepo();
+      repo.create.mockResolvedValue(makeProduct());
+      const { fake, invalidated } = makeCache();
+
+      await makeService(repo, fake).create({
+        name: 'Widget',
+        sku: 'WID-9',
+        price: 1,
+        categoryId: '33333333-3333-4333-8333-333333333333',
+      });
+
+      // A new product can appear on any list page, and there is no detail
+      // key to remove because it has never been read.
+      expect(invalidated).toEqual(['lists']);
+    });
+
+    it('invalidates the detail key AFTER a successful update', async () => {
+      const repo = makeRepo();
+      repo.update.mockResolvedValue(makeProduct({ price: '1599.00' }));
+      const { fake, invalidated } = makeCache();
+
+      await makeService(repo, fake).update(
+        '22222222-2222-4222-8222-222222222222',
+        { price: 1599 },
+      );
+
+      expect(invalidated).toEqual([
+        'product:22222222-2222-4222-8222-222222222222',
+      ]);
+    });
+
+    it('does NOT invalidate when the update failed', async () => {
+      const repo = makeRepo();
+      repo.update.mockResolvedValue(null);
+      const { fake, invalidated } = makeCache();
+
+      await expect(
+        makeService(repo, fake).update('22222222-2222-4222-8222-222222222222', {
+          price: 1599,
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      // Invalidating on a failed write would evict a perfectly good entry
+      // and hand the next reader an unnecessary database query.
+      expect(invalidated).toEqual([]);
+    });
+
+    it('invalidates after a delete', async () => {
+      const repo = makeRepo();
+      repo.softDelete.mockResolvedValue(true);
+      const { fake, invalidated } = makeCache();
+
+      await makeService(repo, fake).remove(
+        '22222222-2222-4222-8222-222222222222',
+      );
+
+      expect(invalidated).toEqual([
+        'product:22222222-2222-4222-8222-222222222222',
+      ]);
     });
   });
 

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { Category } from '../categories/category.model';
 import { Product } from './product.model';
+import { ProductsCacheService } from './products-cache.service';
 import { ProductsController } from './products.controller';
 import { ProductsRepository } from './products.repository';
 import { ProductsService } from './products.service';
@@ -20,7 +21,7 @@ import { ProductsService } from './products.service';
 @Module({
   imports: [SequelizeModule.forFeature([Product, Category])],
   controllers: [ProductsController],
-  providers: [ProductsService, ProductsRepository],
+  providers: [ProductsService, ProductsRepository, ProductsCacheService],
   exports: [ProductsRepository],
 })
 export class ProductsModule {}

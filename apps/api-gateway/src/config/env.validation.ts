@@ -20,6 +20,11 @@ export interface GatewayEnv {
   AUTH_SERVICE_URL: string;
   PRODUCT_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
+
+  REDIS_URL: string;
+  RATE_LIMIT_LIMIT: number;
+  RATE_LIMIT_WINDOW_SECONDS: number;
+  RATE_LIMIT_FAIL_OPEN: boolean;
 }
 
 export const gatewayEnvSchema = Joi.object({
@@ -46,4 +51,27 @@ export const gatewayEnvSchema = Joi.object({
     .min(100)
     .max(30_000)
     .default(5_000),
+
+  // Required, unlike the cache. Rate limiting needs ONE counter shared by
+  // every gateway replica — an in-memory counter means three replicas each
+  // allow the full limit, so the effective limit is three times what you
+  // configured and it resets on every deploy.
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .required(),
+
+  // The global default: generous, because it exists to stop runaway clients
+  // and scrapers, not to shape normal traffic. Endpoints that need a tighter
+  // budget declare it with @RateLimit().
+  RATE_LIMIT_LIMIT: Joi.number().integer().min(1).default(100),
+  RATE_LIMIT_WINDOW_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(3600)
+    .default(60),
+
+  // What to do when Redis is unreachable. See the long note in
+  // rate-limit.guard.ts — this is a real availability-vs-security trade-off,
+  // so it is configuration rather than a hardcoded assumption.
+  RATE_LIMIT_FAIL_OPEN: Joi.boolean().default(true),
 });

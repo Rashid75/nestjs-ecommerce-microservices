@@ -23,7 +23,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "paths": {
-      "@ecommerce/contracts": ["./libs/contracts/src/index.ts"]
+      "@ecommerce/contracts": ["./libs/contracts/src/index.ts"],
+      "@ecommerce/redis": ["./libs/redis/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

@@ -19,6 +19,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { RateLimit } from '../common/rate-limit.decorator';
 import { AuthProxyService } from './auth-proxy.service';
 
 /**
@@ -49,6 +50,10 @@ export class AuthController {
   constructor(private readonly proxy: AuthProxyService) {}
 
   @Post('register')
+  // 5 accounts per IP per 15 minutes. Registration writes a row and runs
+  // bcrypt at cost 12 (~250ms of CPU), so it is both expensive and a
+  // spam-signup target.
+  @RateLimit({ limit: 5, windowSeconds: 900, name: 'auth:register' })
   @ApiOperation({ summary: 'Create an account and receive an access token' })
   @ApiResponse({ status: 201, type: AuthResponseDto })
   @ApiResponse({ status: 400, description: 'Validation failed' })
@@ -59,10 +64,27 @@ export class AuthController {
   }
 
   @Post('login')
+  // 5 attempts per IP per minute.
+  //
+  // THIS IS THE MOST IMPORTANT LIMIT IN THE SYSTEM. Until now the only thing
+  // slowing a credential-stuffing attack was bcrypt's cost — about 250ms per
+  // guess, so roughly 4 guesses a second per connection, and nothing stopped
+  // an attacker opening a thousand connections. Against a leaked
+  // email/password list that is entirely sufficient to succeed.
+  //
+  // 5/minute makes an online guessing attack useless while remaining
+  // invisible to a human who mistypes a password twice.
+  //
+  // What it does NOT solve: an attacker with a botnet gets 5 attempts per IP,
+  // and a distributed attack has many IPs. The next layers are per-ACCOUNT
+  // lockout, credential-breach checks, and MFA — none of which are in this
+  // milestone. Rate limiting raises the cost; it does not close the door.
+  @RateLimit({ limit: 5, windowSeconds: 60, name: 'auth:login' })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Exchange email and password for an access token' })
   @ApiResponse({ status: 200, type: AuthResponseDto })
   @ApiResponse({ status: 401, description: 'Invalid email or password' })
+  @ApiResponse({ status: 429, description: 'Too many attempts' })
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.proxy.login(dto);
   }

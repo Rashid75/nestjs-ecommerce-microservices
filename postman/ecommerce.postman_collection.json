@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
     "name": "E-Commerce Microservices",
-    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 3 — API Gateway + Auth Service + Product Service.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 4 — Gateway + Auth + Product, with Redis caching and rate limiting.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -1264,6 +1264,354 @@
               "path": ["{{apiPrefix}}", "products", "{{productId}}"]
             },
             "description": "Proof that the soft delete works from the API side.\n\nTo see the other half, query the table directly:\n\n```sql\nSELECT sku, deleted_at FROM products WHERE deleted_at IS NOT NULL;\n```\n\nThe row is there. `paranoid: true` is what makes Sequelize filter it out — and note that raw SQL will NOT, which is exactly why the unique index on `sku` is partial."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 · Cache & rate limiting",
+      "description": "Milestone 4. Requires Redis running on localhost:6379 — start it with:\n\n```\ndocker run -d --name ecommerce-redis -p 6379:6379 redis:7-alpine\n```\n\n**Run folder 5 first.** These requests reuse the product it created.\n\nThe cache is made visible through the `X-Cache: HIT | MISS` response header — the same convention a CDN uses. Without it a cache is unverifiable from outside: you cannot tell a hit from a miss, and you cannot prove invalidation worked.\n\nRun 28 → 32 in order. The sequence tells one story: cold read, warm read, write, and the invalidation that makes the next read cold again.",
+      "item": [
+        {
+          "name": "28 Product detail — cold read (MISS)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Ensure a cold start regardless of what ran before: PATCHing the",
+                  "// product bumps its cache key out of Redis. Using the API rather",
+                  "// than FLUSHDB keeps this runnable against any environment.",
+                  "const url = `${pm.environment.get('gatewayUrl')}/${pm.environment.get('apiPrefix')}/products/${pm.environment.get('productId')}`;",
+                  "pm.sendRequest({",
+                  "  url, method: 'PATCH',",
+                  "  header: { 'Content-Type': 'application/json' },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ status: 'ACTIVE' }) },",
+                  "}, () => {});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('X-Cache: MISS — this read reached PostgreSQL', () => {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+                  "});",
+                  "",
+                  "pm.environment.set('coldReadMs', pm.response.responseTime);",
+                  "console.log(`cold read (MISS): ${pm.response.responseTime}ms`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "The first read after a write. Redis has no entry, so the Product Service queries PostgreSQL, stores the result with a TTL, and reports `X-Cache: MISS`.\n\nThe header travels two hops: the Product Service sets it, and the gateway relays it — through a deliberate ALLOW-LIST of exactly one header name. Forwarding every upstream header would leak internal `Server` strings and cookies, which is precisely the detail a gateway exists to hide.\n\nNote the response time. Compare it with the next request."
+          }
+        },
+        {
+          "name": "29 Product detail — warm read (HIT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('X-Cache: HIT — served from Redis', () => {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
+                  "});",
+                  "",
+                  "const cold = Number(pm.environment.get('coldReadMs'));",
+                  "console.log(`warm read (HIT): ${pm.response.responseTime}ms vs cold ${cold}ms`);",
+                  "",
+                  "pm.test('the response is byte-identical to the cold read', () => {",
+                  "  // A cache that returns something SUBTLY different is far worse",
+                  "  // than no cache: the bug only appears on the warm path and is",
+                  "  // invisible in local development where the cache is often cold.",
+                  "  pm.expect(pm.response.json().id).to.eql(pm.environment.get('productId'));",
+                  "  pm.expect(pm.response.json().price).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "Same URL, moments later. Redis answers, PostgreSQL is never touched.\n\n**Do not expect a dramatic speed-up on localhost.** PostgreSQL serves an indexed primary-key lookup in about a millisecond, and Redis has to cross a network socket too — the two are close, and the cached one can even measure slower.\n\nThat is not a failure of the cache; it is a correction to why caches exist. The win is not per-request latency. It is that 10,000 requests for this product cost the database ZERO queries instead of 10,000 — protecting a finite connection pool during a spike. Caching is about capacity, not speed.\n\nOpen the Postman Console (`Ctrl+Alt+C`) to see both timings printed."
+          }
+        },
+        {
+          "name": "30 Update the price (invalidates the cache)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the new price is returned', () => {",
+                  "  pm.expect(pm.response.json().price).to.eql('1234.56');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 1234.56\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "A write. Two invalidations happen after the database commit:\n\n1. **`DEL detail:{id}`** — we know exactly which key is wrong.\n2. **`INCR listgen`** — we have NO idea which cached list pages contained this product, and the query space is unbounded (`?search=x&minPrice=5&sortBy=price&page=7`). So every list key embeds a generation number, and incrementing it makes all of them unreachable at once, in O(1).\n\nThe alternative — `KEYS products:list:*` then DEL — must never be used in production. Redis is single-threaded and `KEYS` walks the entire keyspace while blocking every other client.\n\nTwo ordering rules worth memorising:\n\n- **Write first, invalidate second.** Invalidating first opens a window where a concurrent read repopulates the cache from the OLD row, and that stale value then survives a full TTL.\n- **Invalidate, do not update.** Writing the new value into the cache here looks like an optimisation; it means two concurrent updates can reach the cache in the opposite order to the database, leaving the cache permanently showing the older price."
+          }
+        },
+        {
+          "name": "31 Product detail — cold again, and correct",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('X-Cache: MISS — invalidation worked', () => {",
+                  "  // If this says HIT, the write did not invalidate and the API is",
+                  "  // now serving a stale price. That is the failure mode this whole",
+                  "  // milestone exists to prevent.",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+                  "});",
+                  "",
+                  "pm.test('the price is the NEW one', () => {",
+                  "  pm.expect(pm.response.json().price).to.eql('1234.56');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "The proof. A MISS here means the write really did evict the key; a HIT would mean the client is being served a stale price.\n\nThis pair — 30 then 31 — is the single most important check in this folder. A cache with broken invalidation does not fail loudly; it quietly serves yesterday's prices, and nobody notices until a customer is charged the wrong amount."
+          }
+        },
+        {
+          "name": "32 List products — MISS then HIT",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Fire the same query once so the second (measured) call is warm.",
+                  "const base = `${pm.environment.get('gatewayUrl')}/${pm.environment.get('apiPrefix')}/products?page=1&limit=5&sortBy=createdAt&sortOrder=desc`;",
+                  "pm.environment.set('listWarmupUrl', base);",
+                  "pm.sendRequest(base, (err, res) => {",
+                  "  if (!err) console.log(`list warm-up: X-Cache=${res.headers.get('X-Cache')}`);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('X-Cache: HIT — the identical query was already cached', () => {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
+                  "});",
+                  "",
+                  "pm.test('still a properly enveloped page', () => {",
+                  "  pm.expect(pm.response.json()).to.have.property('items');",
+                  "  pm.expect(pm.response.json()).to.have.property('meta');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products?page=1&limit=5&sortBy=createdAt&sortOrder=desc",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortOrder",
+                  "value": "desc"
+                }
+              ]
+            },
+            "description": "List pages are cached too, keyed by a hash of every parameter that changes the result.\n\nTwo properties the key must have, and both are easy to get wrong:\n\n- **Stable** — `?limit=5&page=1` and `?page=1&limit=5` are the same query and must produce the same key. Serialising the DTO directly depends on property order and would halve the hit rate for no reason.\n- **Total** — every parameter affecting the result must be in the key. Miss one (say `status`) and a filtered request gets served the unfiltered page. That is not a slow response; it is a wrong one.\n\nChange any query parameter below and the next call is a MISS again — that is the key doing its job, not a bug.\n\nList TTL is 60 seconds, five times shorter than a product detail: a page reflects many rows, so any one of them changing makes it stale."
+          }
+        },
+        {
+          "name": "33 Rate limit — six logins, expect 429",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// /api/auth/login is limited to 5 per minute per IP. Fire five",
+                  "// attempts here so the request below is the sixth and is refused.",
+                  "const url = `${pm.environment.get('gatewayUrl')}/${pm.environment.get('apiPrefix')}/auth/login`;",
+                  "const body = {",
+                  "  mode: 'raw',",
+                  "  raw: JSON.stringify({ email: 'nobody@example.com', password: 'not-the-Password1' }),",
+                  "};",
+                  "",
+                  "let done = 0;",
+                  "for (let i = 0; i < 5; i += 1) {",
+                  "  pm.sendRequest(",
+                  "    { url, method: 'POST', header: { 'Content-Type': 'application/json' }, body },",
+                  "    (err, res) => {",
+                  "      done += 1;",
+                  "      if (!err) console.log(`warm-up ${done}: ${res.code} remaining=${res.headers.get('X-RateLimit-Remaining')}`);",
+                  "    },",
+                  "  );",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('429 Too Many Requests', () => {",
+                  "  pm.response.to.have.status(429);",
+                  "});",
+                  "",
+                  "pm.test('tells the client when to come back', () => {",
+                  "  // Without Retry-After a client retries immediately, gets another",
+                  "  // 429, and the retry storm makes the overload worse.",
+                  "  pm.expect(pm.response.headers.get('Retry-After')).to.exist;",
+                  "  pm.expect(Number(pm.response.headers.get('Retry-After'))).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('exposes the budget', () => {",
+                  "  pm.expect(pm.response.headers.get('X-RateLimit-Limit')).to.eql('5');",
+                  "  pm.expect(pm.response.headers.get('X-RateLimit-Remaining')).to.eql('0');",
+                  "});",
+                  "",
+                  "console.log(`retry after ${pm.response.headers.get('Retry-After')}s`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody@example.com\",\n  \"password\": \"not-the-Password1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "login"]
+            },
+            "description": "**The most important control added in this milestone.**\n\nUntil now the only thing slowing a credential-stuffing attack was bcrypt — roughly 250ms per guess, so about 4 guesses per second per connection, and nothing stopped an attacker opening a thousand connections. Against a leaked email/password list that is entirely sufficient to succeed.\n\n5 attempts per IP per minute makes online guessing useless while staying invisible to a human who mistypes twice.\n\nThe counter lives in Redis, not in process memory. That matters: three gateway replicas with in-memory counters would each allow 5, so the real limit would be 15 — and it would reset on every deploy. A limit that depends on how many processes you happen to be running is not a limit.\n\nThe increment uses a **Lua script**, not `INCR` followed by `EXPIRE`. Between those two commands is a real window: a process that dies there leaves a key with no TTL, and that client is locked out permanently with nothing in the logs to explain it. Redis runs a script atomically.\n\n**What this does NOT solve:** an attacker with a botnet gets 5 attempts per IP, and a distributed attack has many IPs. The next layers are per-account lockout, breached-credential checks and MFA. Rate limiting raises the cost; it does not close the door.\n\nWait 60 seconds and the window resets."
+          }
+        },
+        {
+          "name": "34 Rate limit headers on a normal request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK — well inside the budget', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('every response carries the budget', () => {",
+                  "  pm.expect(pm.response.headers.get('X-RateLimit-Limit')).to.exist;",
+                  "  pm.expect(pm.response.headers.get('X-RateLimit-Remaining')).to.exist;",
+                  "  pm.expect(pm.response.headers.get('X-RateLimit-Reset')).to.exist;",
+                  "});",
+                  "",
+                  "console.log(`limit=${pm.response.headers.get('X-RateLimit-Limit')} remaining=${pm.response.headers.get('X-RateLimit-Remaining')} resetIn=${pm.response.headers.get('X-RateLimit-Reset')}s`);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "categories"]
+            },
+            "description": "Rate limiting is applied by a GLOBAL guard, so every route has a budget by default — 100 per minute unless a route declares otherwise with `@RateLimit()`.\n\nGlobal, not per-controller, and the direction matters. A guard applied route by route fails OPEN when someone forgets it: the new endpoint is simply unlimited and nothing tells you. Applied globally it fails CLOSED — a new endpoint inherits the default, and anything needing an exception has to say so out loud.\n\nThe three headers let a well-behaved client pace itself instead of discovering the limit by hitting it. GitHub, Stripe and Twitter all publish exactly this trio."
           }
         }
       ]

@@ -4,10 +4,10 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 3 — Product Service.**
-> Three services, two PostgreSQL databases, JWT authentication, and a full
-> catalogue API with pagination, filtering and sorting. No Redis, cart,
-> orders or RabbitMQ yet.
+> **Current status: Milestone 4 — Redis and Caching.**
+> Three services, two PostgreSQL databases, JWT authentication, a full
+> catalogue API, cache-aside over Redis and Redis-backed rate limiting. No
+> cart, orders or RabbitMQ yet.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -23,6 +23,7 @@ item back.
 - [Repository layout](#repository-layout)
 - [Local setup](#local-setup)
 - [Database and migrations](#database-and-migrations)
+- [Caching and rate limiting](#caching-and-rate-limiting)
 - [API](#api)
 - [Postman](#postman)
 - [Everyday commands](#everyday-commands)
@@ -55,6 +56,10 @@ item back.
 ┌──────────────────┐  ┌──────────────────────┐
 │ ecommerce_auth_db│  │ ecommerce_product_db │  schema from migrations only
 └──────────────────┘  └──────────────────────┘
+
+           Redis :6379
+  ecom:gateway:*   rate-limit counters   REQUIRED by the gateway
+  ecom:product:*   cache-aside entries   OPTIONAL — the cache fails open
 ```
 
 Inside every service the request path is fixed:
@@ -136,6 +141,7 @@ ecommerce/
 │   │       ├── auth/                 proxy to Auth
 │   │       ├── catalog/              proxy to Product
 │   │       ├── common/upstream-proxy.ts   shared failure mapping
+│   │       ├── common/rate-limit.guard.ts global, Redis-backed
 │   │       ├── config/env.validation.ts
 │   │       └── main.ts               ValidationPipe + Swagger
 │   │
@@ -152,6 +158,7 @@ ecommerce/
 │       ├── .sequelizerc
 │       └── src/
 │           ├── products/             model, repository, service, controller
+│           │   └── products-cache.service.ts   keys + invalidation policy
 │           ├── categories/           model, repository, service, controller
 │           ├── common/domain-errors.ts
 │           ├── database/             connection + migrations
@@ -159,11 +166,15 @@ ecommerce/
 │           └── main.ts
 │
 ├── libs/
-│   └── contracts/                    @ecommerce/contracts · type:lib
+│   ├── contracts/                    @ecommerce/contracts · type:lib
+│   │   └── src/lib/
+│   │       ├── auth/                 register, login, tokens, roles
+│   │       ├── catalog/              product, category, query DTOs
+│   │       └── common/               pagination envelope
+│   └── redis/                        @ecommerce/redis · type:lib
 │       └── src/lib/
-│           ├── auth/                 register, login, tokens, roles
-│           ├── catalog/              product, category, query DTOs
-│           └── common/               pagination envelope
+│           ├── redis.module.ts       lazily-connected client, key prefix
+│           └── cache.service.ts      cache-aside, TTL, invalidation
 │
 ├── docs/PROJECT-PLAN.md              milestones, progress, deferred items
 ├── postman/                          collection + local environment
@@ -178,10 +189,17 @@ ecommerce/
 
 ## Local setup
 
-Prerequisites: Node.js 20+, npm 10+, PostgreSQL 13+ running locally.
+Prerequisites: Node.js 20+, npm 10+, PostgreSQL 13+ and Redis 7+ running
+locally.
 
 ```bash
 npm install
+```
+
+Start Redis — the simplest route is a container:
+
+```bash
+docker run -d --name ecommerce-redis -p 6379:6379 redis:7-alpine
 ```
 
 ```bash
@@ -265,6 +283,80 @@ without it a mid-way failure leaves a schema `SequelizeMeta` has no record of.
 Models and migrations are **separate concerns**, kept in sync by hand. The
 migration is the authoritative history; the model is one process's view of it.
 If they disagree, the migration is right.
+
+---
+
+## Caching and rate limiting
+
+One Redis instance serves both, namespaced by key prefix. Redis has no
+equivalent of a per-service database, so the prefix is the isolation.
+
+| Prefix          | Owner           | Contents            | Required?           |
+| --------------- | --------------- | ------------------- | ------------------- |
+| `ecom:product:` | Product Service | Cache-aside entries | **No** — fails open |
+| `ecom:gateway:` | API Gateway     | Rate-limit counters | **Yes**             |
+
+### Cache-aside
+
+```text
+Request → Redis ──HIT──→ Response
+             │
+            MISS
+             ↓
+         PostgreSQL → Redis (SET with TTL) → Response
+```
+
+| What           | Key                 | TTL  | Why                                     |
+| -------------- | ------------------- | ---- | --------------------------------------- |
+| Product detail | `detail:{id}`       | 300s | Read constantly, changes rarely         |
+| Product list   | `list:{gen}:{hash}` | 60s  | Expensive query; reflects many rows     |
+| Categories     | _not cached_        | —    | Twenty rows, one indexed query, no JOIN |
+
+Every read returns **`X-Cache: HIT`** or **`MISS`** — the CDN convention,
+and the only way to verify caching from outside the system.
+
+**Invalidation.** A write deletes the detail key it knows is wrong, then
+`INCR`s a generation counter embedded in every list key. That makes all
+cached list pages unreachable in O(1) without touching them, because the
+alternative — `KEYS products:list:*` — blocks single-threaded Redis across
+the entire keyspace. Superseded keys simply expire.
+
+Two ordering rules: **write first, invalidate second** (invalidating first
+lets a concurrent read repopulate from the old row), and **invalidate, do not
+update** (two concurrent updates can reach the cache in the opposite order to
+the database and stick).
+
+**The cache never takes the service down.** Every operation is wrapped: on a
+Redis failure, reads return a miss and writes are dropped, so the caller
+falls through to PostgreSQL. Set `CACHE_ENABLED=false` to bypass it entirely
+without a code change.
+
+### Rate limiting
+
+A **global** guard, so a new endpoint inherits a budget rather than having
+none. Opt out with `@SkipRateLimit()`; tighten with `@RateLimit()`.
+
+| Route                     | Limit        | Why                                                                                     |
+| ------------------------- | ------------ | --------------------------------------------------------------------------------------- |
+| `POST /api/auth/login`    | 5 / minute   | Credential stuffing. Until this existed, only bcrypt's ~250ms slowed a guessing attack. |
+| `POST /api/auth/register` | 5 / 15 min   | Writes a row and burns 250ms of CPU per call                                            |
+| everything else           | 100 / minute | Runaway clients and scrapers                                                            |
+
+Counters live in Redis, not process memory — three replicas with in-memory
+counters would allow three times the configured limit and reset on every
+deploy. The increment is a **Lua script**, because `INCR` then `EXPIRE` as
+two commands leaves a window where a crash creates a key with no TTL and a
+permanently locked-out client.
+
+Responses carry `X-RateLimit-Limit`, `-Remaining`, `-Reset`, and `Retry-After`
+on a 429.
+
+**Known limits:** keyed by socket IP only. `X-Forwarded-For` is deliberately
+ignored — it is client-supplied, so trusting it without a real proxy in front
+makes the limiter trivially bypassable. Behind a load balancer this needs
+`app.set('trust proxy', 1)`, which is a deployment-time decision. Everyone
+behind one NAT shares a counter, and a botnet gets 5 attempts per IP; per-
+account lockout and MFA are the next layers.
 
 ---
 
@@ -467,6 +559,15 @@ both pass a pre-check and both insert. Only the index is atomic.
 history will reference products long after they stop being sold. Deleting a
 category must not silently delete its products.
 
+**A cache is an optimisation, so it must never be a hard dependency.** Redis
+connects lazily and every cache operation fails open. PostgreSQL, by
+contrast, is proven at boot — a service without its database cannot do its
+job at all, and should refuse to start.
+
+**Invalidate by generation, never by scanning.** `KEYS` blocks
+single-threaded Redis across the whole keyspace. Embedding a counter in the
+key and incrementing it invalidates every list page in O(1).
+
 **`synchronize: false`, hardcoded.** No environment toggle. Sequelize may
 never emit DDL, so the migration history cannot become a lie.
 
@@ -485,8 +586,9 @@ Stated plainly, tracked with triggers in
    gateway can create, edit and delete products. Deliberate — closing it needs
    the RS256 decision — but this stack **must not be exposed beyond
    localhost**.
-2. **No rate limiting.** `POST /api/auth/login` is bounded only by bcrypt's
-   cost.
+2. **Rate limiting is per-IP only** and fails open when Redis is down. It
+   raises the cost of credential stuffing; it does not stop a distributed
+   attack. Per-account lockout and MFA are still absent.
 3. **No RBAC**, though `role` is already a claim and a column.
 4. **No audit logging** of authentication or catalogue mutations.
 5. **No correlation IDs** — a request cannot yet be traced across services.
@@ -535,5 +637,21 @@ target pins its own in `project.json` (3000→9229, 3001→9230, 3002→9231).
 
 **Postman: `Missing environment variable(s)`** — the `ecommerce · local`
 environment is not selected in the top-right picker.
+
+**`redis unavailable at startup — running without cache`** — Redis is not
+running. The services work; every read goes to PostgreSQL and rate limiting
+is inactive. Start it with `docker run -d --name ecommerce-redis -p 6379:6379 redis:7-alpine`.
+
+**`X-Cache` is always MISS** — either Redis is down (see above) or
+`CACHE_ENABLED=false` in `.env`. Check the product service log for
+`connected to redis://...`.
+
+**A stale price after an update** — invalidation failed. Confirm the write
+returned 2xx: invalidation deliberately runs only after a successful commit.
+`CACHE_ENABLED=false` isolates the cache from the database as a first check.
+
+**Unexpected 429s while testing** — `/api/auth/login` allows 5 per minute.
+Wait for `Retry-After`, or clear the counter with
+`docker exec ecommerce-redis redis-cli --scan --pattern 'ecom:gateway:rl:*' | xargs -r docker exec -i ecommerce-redis redis-cli del`.
 
 **Nx returns a stale result** — clear the local cache with `npx nx reset`.

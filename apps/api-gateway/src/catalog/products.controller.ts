@@ -17,7 +17,9 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CatalogProxyService } from './catalog-proxy.service';
 
@@ -56,18 +58,26 @@ export class ProductsController {
   @ApiResponse({ status: 200, type: PaginatedProductsDto })
   @ApiResponse({ status: 400, description: 'Invalid query parameter' })
   @ApiResponse({ status: 503, description: 'Product service unavailable' })
-  findAll(@Query() query: QueryProductsDto): Promise<PaginatedProductsDto> {
-    return this.catalog.listProducts(query);
+  async findAll(
+    @Query() query: QueryProductsDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PaginatedProductsDto> {
+    const result = await this.catalog.listProducts(query);
+    relayCacheHeader(res, result.headers);
+    return result.data;
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get one product, with its category' })
   @ApiResponse({ status: 200, type: ProductDto })
   @ApiResponse({ status: 404, description: 'Product not found' })
-  findOne(
+  async findOne(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<ProductDto> {
-    return this.catalog.getProduct(id);
+    const result = await this.catalog.getProduct(id);
+    relayCacheHeader(res, result.headers);
+    return result.data;
   }
 
   @Post()
@@ -98,5 +108,24 @@ export class ProductsController {
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<void> {
     return this.catalog.deleteProduct(id);
+  }
+}
+
+/**
+ * Passes the Product Service's X-Cache verdict through to the client.
+ *
+ * The gateway does not cache anything itself in this milestone, so it has no
+ * opinion of its own — it reports what the upstream said. When gateway-level
+ * caching arrives the two would need combining (a CDN would show
+ * `X-Cache: HIT, MISS` for a chain), which is exactly why the header is a
+ * chain of hops rather than a single boolean.
+ */
+function relayCacheHeader(
+  res: Response,
+  headers: Record<string, string>,
+): void {
+  const value = headers['x-cache'];
+  if (value !== undefined) {
+    res.setHeader('X-Cache', value);
   }
 }

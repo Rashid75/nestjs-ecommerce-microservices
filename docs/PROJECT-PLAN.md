@@ -10,13 +10,14 @@ bring it back, rather than a vague "later".
 
 |                         |                                             |
 | ----------------------- | ------------------------------------------- |
-| **Milestones complete** | 3 of 15                                     |
+| **Milestones complete** | 4 of 15                                     |
 | **Services running**    | API Gateway, Auth, Product                  |
+| **Infrastructure**      | PostgreSQL 18, Redis 7                      |
 | **Databases**           | `ecommerce_auth_db`, `ecommerce_product_db` |
-| **Next milestone**      | 4 — Redis and caching                       |
+| **Next milestone**      | 5 — Inventory Service                       |
 
 ```text
-M1 ██ M2 ██ M3 ██ M4 ░░ M5 ░░ M6 ░░ M7 ░░ M8 ░░
+M1 ██ M2 ██ M3 ██ M4 ██ M5 ░░ M6 ░░ M7 ░░ M8 ░░
 M9 ░░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
@@ -56,6 +57,9 @@ This is a **learning project**. The rules it runs under:
      ▼               ▼
  ecommerce_      ecommerce_
   auth_db        product_db
+
+Redis :6379   ecom:gateway:*  rate-limit counters (required)
+              ecom:product:*  cache-aside entries (optional, fails open)
 ```
 
 Target, for reference — this is where it ends up, not where it is:
@@ -190,22 +194,69 @@ Type-check, lint and 18 unit tests across three projects.
 
 ---
 
-## ⬜ Milestone 4 — Redis and Caching
+## ✅ Milestone 4 — Redis and Caching
 
-**Next up.** Product caching with cache-aside, TTL, explicit invalidation on
-write, and rate limiting where it actually matters (the login endpoint, which
-is currently the most significant open security gap).
+**Status: complete.**
 
-Learn: cache-aside, hit/miss, TTL, invalidation, cache stampede,
-write-through vs write-behind, distributed locks.
+### Delivered
 
-Rule: do not cache everything. Cache what is read far more often than written.
+**`libs/redis`** — the third library, created because there were two real
+consumers, not in anticipation of one.
+
+- `RedisModule.forRootAsync` — one lazily-connected ioredis client per app,
+  each with its own key prefix (`ecom:gateway:`, `ecom:product:`), since
+  Redis has no per-service isolation the way PostgreSQL has databases
+- `CacheService` — cache-aside `getOrSet`, TTL with jitter, negative
+  caching, generation-based invalidation, best-effort single flight
+- **Every operation fails open.** Redis down means slower, never broken
+
+**Product Service** — cache-aside over the catalogue
+
+- `GET /products/:id` cached for 300s, with single-flight rebuild
+- `GET /products` cached for 60s, keyed by a stable hash of every parameter
+  that changes the result
+- Writes `DEL` the detail key and `INCR` the list generation, after the
+  database commit
+- `X-Cache: HIT | MISS` on every read, relayed by the gateway
+- `CACHE_ENABLED=false` kill switch
+- Categories deliberately **not** cached — twenty rows, one indexed query
+
+**API Gateway** — Redis-backed rate limiting
+
+- Global guard, so a new endpoint inherits a budget instead of having none
+- `@RateLimit()` per route, `@SkipRateLimit()` to opt out
+- `/auth/login` 5/min, `/auth/register` 5/15min, everything else 100/min
+- Atomic INCR + EXPIRE via a Lua script
+- `X-RateLimit-Limit`, `-Remaining`, `-Reset` and `Retry-After`
+- `RATE_LIMIT_FAIL_OPEN` — an explicit availability-vs-security switch
+
+### Key decisions
+
+| Decision                                                  | Why                                                                                                                                        |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Cache-aside, not write-through/behind                     | Only caches what is read; a cache failure degrades to slower, not wrong or lost.                                                           |
+| Cache fails open, boot does not require Redis             | A cache is an optimisation. An optimisation must never be a hard dependency. Contrast with PostgreSQL, which is proven at boot.            |
+| Generation counter, never `KEYS` + `DEL`                  | `KEYS` blocks single-threaded Redis across the whole keyspace. `INCR` invalidates every list page in O(1).                                 |
+| Invalidate after the write, and delete rather than update | Invalidating first lets a concurrent read repopulate from the old row. Writing the new value lets two updates land out of order and stick. |
+| TTL jitter                                                | Keys written together would otherwise expire together and hand the database a cliff instead of a slope.                                    |
+| Negative caching                                          | Without it the cache protects only the happy path — the one an attacker avoids.                                                            |
+| Lua script for the limiter                                | `INCR` then `EXPIRE` is two round trips; a crash between them creates a key with no TTL and a permanently locked-out client.               |
+| Rate limiter is global                                    | Per-route guards fail open when forgotten. Global fails closed.                                                                            |
+| `X-Forwarded-For` ignored                                 | Client-supplied, so trusting it without a real proxy makes the limiter trivially bypassable. Needs `trust proxy` at deployment time.       |
+| Fail-open by default, configurable                        | Availability is the likelier incident today; fail-closed is defensible for credential endpoints in production.                             |
+
+### Verified
+
+34 unit tests (12 cache, 15 product, 7 auth). With Redis **stopped**: all
+three services boot, log `running without cache`, serve the catalogue with
+`X-Cache: MISS`, and pass eight rapid logins through un-throttled — the
+fail-open path, confirmed end to end.
 
 ---
 
 ## ⬜ Milestone 5 — Inventory Service
 
-Concurrency-safe stock: increase, decrease, reserve, release. Transactions,
+**Next up.** Concurrency-safe stock: increase, decrease, reserve, release. Transactions,
 isolation levels, row locking (`SELECT ... FOR UPDATE`), and the overselling
 race condition demonstrated before it is fixed.
 
@@ -315,8 +366,9 @@ exists so that "not yet" never quietly becomes "never".
 1. **Catalogue write endpoints are unauthenticated.** Deliberate — closing it
    properly requires the RS256 decision above — but it means this stack must
    not be exposed beyond localhost.
-2. **No rate limiting anywhere.** `POST /api/auth/login` is protected only by
-   bcrypt's cost.
+2. **Rate limiting is per-IP only**, and fails open when Redis is down. It
+   raises the cost of credential stuffing; it does not stop a distributed
+   attack. Per-account lockout and MFA are still absent.
 3. **No audit logging** of authentication or catalogue mutations.
 4. **`.env` secrets are development values** that have appeared in a terminal
    transcript. Rotate before any shared environment.

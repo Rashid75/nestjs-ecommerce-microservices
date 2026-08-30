@@ -10,6 +10,15 @@ import { AxiosError, AxiosRequestConfig } from 'axios';
 import { firstValueFrom } from 'rxjs';
 
 /**
+ * Upstream response headers the gateway is willing to relay.
+ *
+ * `x-cache` is here so a client can see whether the Product Service served
+ * a request from Redis or from PostgreSQL — the same signal a CDN gives you,
+ * and the only way to verify caching from outside the system.
+ */
+const FORWARDED_RESPONSE_HEADERS = ['x-cache'] as const;
+
+/**
  * Shared forwarding and failure translation for every downstream service.
  *
  * This was inlined in AuthProxyService through Milestone 2. The Product
@@ -50,9 +59,33 @@ export abstract class UpstreamProxy {
    * log and never to the client.
    */
   protected async forward<T>(request: AxiosRequestConfig): Promise<T> {
+    return (await this.forwardWithHeaders<T>(request)).data;
+  }
+
+  /**
+   * Same call, but keeps a small allow-list of the upstream's response
+   * headers so the gateway can pass them on.
+   *
+   * An ALLOW-LIST, not a blanket copy. Forwarding every header would leak
+   * the internal service's `Server`, its cookies and any bespoke debugging
+   * header straight to the public — precisely the internal detail the
+   * gateway exists to hide.
+   */
+  protected async forwardWithHeaders<T>(
+    request: AxiosRequestConfig,
+  ): Promise<{ data: T; headers: Record<string, string> }> {
     try {
       const response = await firstValueFrom(this.http.request<T>(request));
-      return response.data;
+
+      const forwarded: Record<string, string> = {};
+      for (const header of FORWARDED_RESPONSE_HEADERS) {
+        const value = response.headers[header];
+        if (typeof value === 'string') {
+          forwarded[header] = value;
+        }
+      }
+
+      return { data: response.data, headers: forwarded };
     } catch (error) {
       const axiosError = error as AxiosError;
 

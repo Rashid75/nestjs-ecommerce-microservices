@@ -1,7 +1,11 @@
+import { RedisModule } from '@ecommerce/redis';
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from '../auth/auth.module';
 import { CatalogModule } from '../catalog/catalog.module';
+import { RateLimitGuard } from '../common/rate-limit.guard';
+import type { GatewayEnv } from '../config/env.validation';
 import { gatewayEnvSchema } from '../config/env.validation';
 
 /**
@@ -23,8 +27,29 @@ import { gatewayEnvSchema } from '../config/env.validation';
       validationOptions: { abortEarly: false, allowUnknown: true },
       cache: true,
     }),
+    RedisModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<GatewayEnv, true>) => ({
+        url: config.get('REDIS_URL', { infer: true }),
+        keyPrefix: 'ecom:gateway:',
+      }),
+    }),
+
     AuthModule,
     CatalogModule,
+  ],
+  providers: [
+    // GLOBAL, not per-controller, and that direction matters.
+    //
+    // A guard applied route by route fails OPEN when someone forgets it: the
+    // new endpoint is simply unlimited, and nothing tells you. Applied
+    // globally it fails CLOSED — a new endpoint inherits the default budget,
+    // and anything needing an exception has to say so out loud with
+    // @RateLimit() or @SkipRateLimit().
+    //
+    // Same argument as making JwtAuthGuard global later: default to
+    // protected, opt out deliberately.
+    { provide: APP_GUARD, useClass: RateLimitGuard },
   ],
 })
 export class AppModule {}

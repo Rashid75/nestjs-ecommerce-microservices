@@ -17,7 +17,9 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ProductsService } from './products.service';
 
@@ -54,8 +56,17 @@ export class ProductsController {
   })
   @ApiResponse({ status: 200, type: PaginatedProductsDto })
   @ApiResponse({ status: 400, description: 'Invalid query parameter' })
-  findAll(@Query() query: QueryProductsDto): Promise<PaginatedProductsDto> {
-    return this.products.findAll(query);
+  async findAll(
+    @Query() query: QueryProductsDto,
+    // `passthrough: true` lets us touch the response object while STILL
+    // returning a value normally. Without it, Nest hands full control of the
+    // response to the handler and the returned object is silently ignored —
+    // the request just hangs. It is an easy hour to lose.
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PaginatedProductsDto> {
+    const result = await this.products.findAll(query);
+    res.setHeader('X-Cache', result.cacheHit ? 'HIT' : 'MISS');
+    return result.data;
   }
 
   @Get(':id')
@@ -63,14 +74,22 @@ export class ProductsController {
   @ApiResponse({ status: 200, type: ProductDto })
   @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
   @ApiResponse({ status: 404, description: 'Product not found' })
-  findOne(
+  async findOne(
     // ParseUUIDPipe rejects a malformed id with 400 BEFORE any query runs.
     // Without it, `/products/nonsense` reaches PostgreSQL and comes back as
     // a 500 from `invalid input syntax for type uuid` — an internal error
     // for what is plainly a client mistake.
+    //
+    // It now also protects the CACHE: an unvalidated id would become a Redis
+    // key, so a scripted probe could fill the keyspace with junk.
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<ProductDto> {
-    return this.products.findOne(id);
+    const result = await this.products.findOne(id);
+    // The same header a CDN sets. It is what makes the cache observable —
+    // and therefore verifiable — from the outside.
+    res.setHeader('X-Cache', result.cacheHit ? 'HIT' : 'MISS');
+    return result.data;
   }
 
   @Post()

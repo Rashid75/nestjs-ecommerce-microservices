@@ -25,8 +25,10 @@ export class CatalogProxyService extends UpstreamProxy {
 
   // --- products ---
 
-  listProducts(query: QueryProductsDto): Promise<PaginatedProductsDto> {
-    return this.forward<PaginatedProductsDto>({
+  listProducts(
+    query: QueryProductsDto,
+  ): Promise<{ data: PaginatedProductsDto; headers: Record<string, string> }> {
+    return this.forwardWithHeaders<PaginatedProductsDto>({
       method: 'GET',
       url: '/products',
       // `params`, not string concatenation. axios serialises and URL-encodes
@@ -36,8 +38,13 @@ export class CatalogProxyService extends UpstreamProxy {
     });
   }
 
-  getProduct(id: string): Promise<ProductDto> {
-    return this.forward<ProductDto>({ method: 'GET', url: `/products/${id}` });
+  getProduct(
+    id: string,
+  ): Promise<{ data: ProductDto; headers: Record<string, string> }> {
+    return this.forwardWithHeaders<ProductDto>({
+      method: 'GET',
+      url: `/products/${id}`,
+    });
   }
 
   createProduct(body: unknown): Promise<ProductDto> {

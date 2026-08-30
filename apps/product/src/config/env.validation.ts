@@ -23,6 +23,11 @@ export interface ProductEnv {
   PRODUCT_DB_DATABASE: string;
   PRODUCT_DB_LOGGING: boolean;
   PRODUCT_DB_SSL: boolean;
+
+  REDIS_URL: string;
+  CACHE_ENABLED: boolean;
+  CACHE_PRODUCT_TTL_SECONDS: number;
+  CACHE_LIST_TTL_SECONDS: number;
 }
 
 export const productEnvSchema = Joi.object({
@@ -39,4 +44,28 @@ export const productEnvSchema = Joi.object({
   PRODUCT_DB_DATABASE: Joi.string().required(),
   PRODUCT_DB_LOGGING: Joi.boolean().default(false),
   PRODUCT_DB_SSL: Joi.boolean().default(false),
+
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .required(),
+
+  // A kill switch. When a cache starts serving something wrong, the first
+  // thing you want at 3am is to turn it off without a code change and
+  // confirm the database path is still correct. A cache you cannot disable
+  // is a cache you cannot debug.
+  CACHE_ENABLED: Joi.boolean().default(true),
+
+  // 5 minutes. Product detail changes rarely, and every write invalidates
+  // explicitly — so the TTL is a backstop against missed invalidations, not
+  // the primary freshness mechanism.
+  CACHE_PRODUCT_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(86400)
+    .default(300),
+
+  // 60 seconds. Much shorter, because a list reflects many rows and any one
+  // of them changing makes it stale. Generation-based invalidation handles
+  // the common case; this bounds the damage from anything it misses.
+  CACHE_LIST_TTL_SECONDS: Joi.number().integer().min(1).max(3600).default(60),
 });
