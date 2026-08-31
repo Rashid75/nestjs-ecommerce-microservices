@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "nx run-many -t serve -p api-gateway auth product inventory --output-style=stream",
+    "start": "nx run-many -t serve -p api-gateway auth product inventory cart --output-style=stream",
     "start:gateway": "nx serve api-gateway",
     "start:auth": "nx serve auth",
     "start:product": "nx serve product",
@@ -22,12 +22,16 @@
     "product:migrate:undo": "nx run product:migrate:undo",
     "product:migrate:status": "nx run product:migrate:status",
     "product:migration:generate": "nx run product:migration:generate --",
-    "db:migrate": "nx run-many -t migrate -p auth product inventory",
+    "db:migrate": "nx run-many -t migrate -p auth product inventory cart",
     "start:inventory": "nx serve inventory",
     "inventory:migrate": "nx run inventory:migrate",
     "inventory:migrate:undo": "nx run inventory:migrate:undo",
     "inventory:migrate:status": "nx run inventory:migrate:status",
-    "demo:oversell": "node tools/oversell-demo.mjs"
+    "demo:oversell": "node tools/oversell-demo.mjs",
+    "start:cart": "nx serve cart",
+    "cart:migrate": "nx run cart:migrate",
+    "cart:migrate:undo": "nx run cart:migrate:undo",
+    "cart:migrate:status": "nx run cart:migrate:status"
   },
   "private": true,
   "dependencies": {

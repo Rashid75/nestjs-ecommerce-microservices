@@ -4,10 +4,10 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 5 — Inventory Service.**
-> Four services, three PostgreSQL databases, JWT authentication, a catalogue
-> API with Redis caching, Redis-backed rate limiting, and concurrency-safe
-> stock. No cart, orders or RabbitMQ yet.
+> **Current status: Milestone 6 — Cart Service.**
+> Five services, four PostgreSQL databases, an authenticated cart, a
+> catalogue API with Redis caching, Redis-backed rate limiting, and
+> concurrency-safe stock. No orders or RabbitMQ yet.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -576,6 +576,21 @@ connects lazily and every cache operation fails open. PostgreSQL, by
 contrast, is proven at boot — a service without its database cannot do its
 job at all, and should refuse to start.
 
+**The cart lives in PostgreSQL, not Redis.** It must survive a restart, be
+queryable for abandonment analytics, and be transactional with order creation.
+Redis is used in that flow for exactly one thing — caching token
+introspection — which is the difference between picking a tool because it
+fits and because it is installed.
+
+**Money arithmetic happens in integer minor units.** Float drift appears for
+some prices and not others (`16.08 * 3` is lossy, `19.99 * 3` is not), so
+spot-checking a handful of values proves nothing.
+
+**The gateway introspects tokens rather than verifying them.** An HS256 key
+that can verify can also mint; handing a public-facing process that ability
+to read one claim is a bad trade. RS256 is the clean fix and is still
+pending.
+
 **Stock is never cached.** The Inventory Service has no `REDIS_URL`. A
 cached `available: 1` is not a slightly stale product name — it is a promise
 the warehouse cannot keep, and the staleness window is exactly the window in
@@ -605,21 +620,25 @@ Stated plainly, tracked with triggers in
 [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md):
 
 1. **Catalogue AND inventory write endpoints are unauthenticated.** Anyone
-   reaching the gateway can create, edit and delete products — and invent or
-   destroy stock outright via `receive` and `adjust`, or cancel someone
-   else's reservation via `release`. This stack **must not be exposed beyond
-   localhost**.
-2. **Rate limiting is per-IP only** and fails open when Redis is down. It
+   reaching the gateway can create, edit and delete products, invent or
+   destroy stock via `receive` and `adjust`, or cancel someone else's
+   reservation via `release`. `AuthenticatedUserGuard` now exists, so
+   closing this is a small change — but until it is done, this stack **must
+   not be exposed beyond localhost**.
+2. **Internal services trust `X-User-Id`.** The Cart Service does not verify
+   tokens; it believes a header, safe only because it binds to loopback.
+   Needs a shared secret, mTLS, or RS256 internal tokens.
+3. **Rate limiting is per-IP only** and fails open when Redis is down. It
    raises the cost of credential stuffing; it does not stop a distributed
    attack. Per-account lockout and MFA are still absent.
-3. **No RBAC**, though `role` is already a claim and a column.
-4. **No audit logging** of authentication or catalogue mutations.
-5. **No correlation IDs** — a request cannot yet be traced across services.
-6. **Reservations never expire.** An abandoned cart holds stock indefinitely.
+4. **No RBAC**, though `role` is already a claim and a column.
+5. **No audit logging** of authentication or catalogue mutations.
+6. **No correlation IDs** — a request cannot yet be traced across services.
+7. **Reservations never expire.** An abandoned cart holds stock indefinitely.
    Needs per-order reservation records with a TTL (M6/M8).
-7. **Stock operations are not idempotent.** Retrying a reserve after a
+8. **Stock operations are not idempotent.** Retrying a reserve after a
    timeout double-reserves (M8).
-8. **`.env` holds development secrets** that have appeared in a terminal
+9. **`.env` holds development secrets** that have appeared in a terminal
    transcript. Rotate before any shared environment.
 
 ---
@@ -654,6 +673,14 @@ carries `requested` and `available`. Check the ledger with
 
 **`npm run demo:oversell` reports 429s** — `reserve` is limited to 30/min.
 Wait a minute, or lower `--concurrency`.
+
+**`401 Authentication required` on `/api/cart`** — every cart route needs
+`Authorization: Bearer <token>`. Register or log in first.
+
+**`503 Authentication is temporarily unavailable`** — the gateway could not
+reach the Auth Service to introspect the token. Unlike rate limiting,
+authentication fails CLOSED: failing open would be a complete bypass rather
+than a degradation.
 
 **`Unknown authentication strategy "jwt"`** — `JwtStrategy` is missing from a
 module's `providers`. Instantiation is what registers it with Passport.

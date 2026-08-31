@@ -30,3 +30,6 @@ export * from './lib/catalog/query-products.dto';
 
 // --- inventory ---
 export * from './lib/inventory/inventory.dto';
+
+// --- cart ---
+export * from './lib/cart/cart.dto';

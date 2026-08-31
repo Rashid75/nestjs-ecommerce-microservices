@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
     "name": "E-Commerce Microservices",
-    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 5 — Gateway + Auth + Product + Inventory, with Redis caching and rate limiting.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 6 — Gateway + Auth + Product + Inventory + Cart, with Redis caching, rate limiting and gateway authentication.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -2094,6 +2094,389 @@
               "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
             },
             "description": "## The proof lives outside Postman\n\nA race condition needs genuinely simultaneous connections contending over the same row. Postman sends requests one after another, and the Collection Runner is no different — so nothing in this collection can demonstrate overselling or its absence.\n\nRun this from the repo root instead:\n\n```\nnpm run demo:oversell\n```\n\nIt creates a fresh product with **exactly one unit**, fires 20 concurrent reservations with `Promise.all`, and reports how many succeeded. A correct service allows exactly one:\n\n```\n  200 OK        1   reservation granted\n  409 Conflict  19  insufficient stock — lost the race\n  ✓ CORRECT\n```\n\nVary it:\n\n```\nnpm run demo:oversell -- --concurrency 50 --stock 3\n```\n\n### See the lock with your own eyes\n\nThe other worthwhile experiment needs two psql sessions. In the first:\n\n```sql\nBEGIN;\nSELECT quantity_on_hand, quantity_reserved\n  FROM inventory_items WHERE sku = 'YOUR-SKU' FOR UPDATE;\n```\n\nIn the second, run the identical statement. **It blocks** — visibly, indefinitely — until you `COMMIT` or `ROLLBACK` the first. That is pessimistic locking: the race is closed by serialising the two transactions.\n\nThen try it without `FOR UPDATE`. Both return instantly, both see the same number, and both would happily proceed to sell the same unit. That difference is the entire milestone."
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 · Cart (authenticated)",
+      "description": "**Run folder 1 first** (for a token) and **folder 5** (for a product).\n\nThe first authenticated resource in the system. Every route here requires `Authorization: Bearer <token>` — the gateway verifies it by asking the Auth Service, then forwards only the resolved user id to the Cart Service.\n\nNotice there is **no `:cartId`** anywhere. The cart is always *yours*, identified by the token. That is not convenience — an endpoint shaped `GET /carts/:cartId` invites insecure direct object reference, where the handler must remember an ownership check and incrementing an id reads a stranger's basket. With no id in the URL there is nothing to forget.",
+      "item": [
+        {
+          "name": "46 GET /cart with no token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "pm.test('fails closed — no anonymous shared basket', () => {",
+                  "  pm.expect(pm.response.json().message).to.match(/authentication/i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "The guard rejects before anything else runs. A cart with no owner is not a cart, and defaulting to a placeholder id would mean every anonymous request shared one basket."
+          }
+        },
+        {
+          "name": "47 GET /cart with a tampered token → 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.environment.get('accessToken');",
+                  "if (!token) { throw new Error('Run folder 1 first — no accessToken stored'); }",
+                  "const [h, p, s] = token.split('.');",
+                  "const flipped = p.slice(0, -1) + (p.slice(-1) === 'A' ? 'B' : 'A');",
+                  "pm.variables.set('tamperedToken', `${h}.${flipped}.${s}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "pm.test('the SIGNATURE caught it, not the gateway', () => {",
+                  "  // The gateway holds no signing key. It forwarded the token to the",
+                  "  // Auth Service, which verified the signature and said no.",
+                  "  pm.expect(pm.response.json().message).to.match(/invalid|expired/i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tamperedToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "**Why the gateway asks rather than checks.**\n\nThe obvious design is for the gateway to verify the JWT itself. That needs the signing key — and with HS256 a key that can VERIFY can also MINT. Giving a public-facing process the ability to issue admin tokens, purely so it can read a `sub` claim, is a bad trade.\n\nSo the gateway INTROSPECTS: it forwards the token to `/auth/me` and believes the answer. No key sharing at all.\n\nThe cost is a round trip per authenticated request, which Redis absorbs — successful introspections are cached for 30 seconds under a **SHA-256 hash of the token**, never the token itself. Redis keys appear in SCAN output, slow logs, dashboards and support screenshots; a raw bearer token in any of those is a credential leak that still works.\n\nThat 30s is also the revocation window: a disabled account keeps working for up to half a minute, down from the token's full 15.\n\nThe clean long-term fix is RS256 — Auth keeps the private key, everyone else verifies with the public one and can mint nothing."
+          }
+        },
+        {
+          "name": "48 GET /cart — get or create",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('an empty cart, not a 404', () => {",
+                  "  pm.expect(b.items).to.eql([]);",
+                  "  pm.expect(b.subtotal).to.eql('0.00');",
+                  "  pm.expect(b.itemCount).to.eql(0);",
+                  "});",
+                  "pm.test('owned by me', () => {",
+                  "  pm.expect(b.userId).to.eql(pm.environment.get('userId'));",
+                  "});",
+                  "pm.environment.set('cartId', b.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "A GET that can create a row — unusual, and worth defending.\n\nThe alternative is `POST /cart` first, which means every client handles \"no cart yet\" and the first page load costs two round trips. \"Your cart\" conceptually always exists and is merely empty, so the API models it that way.\n\nIt is safe because it is **idempotent**: call it a hundred times, get the same single cart. That is guaranteed by a PARTIAL UNIQUE INDEX (`WHERE status = 'ACTIVE'`), not by convention — two simultaneous first requests both find nothing and both insert, and the index makes the loser fail so the repository can re-read the winner. Same check-then-act race as the duplicate email and the last unit of stock, same answer: let the database arbitrate.\n\nSend this twice and confirm the `id` does not change."
+          }
+        },
+        {
+          "name": "49 POST /cart/items — add a product",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('one line, quantity 2', () => {",
+                  "  pm.expect(b.items).to.have.lengthOf(1);",
+                  "  pm.expect(b.items[0].quantity).to.eql(2);",
+                  "});",
+                  "pm.test('price and name were filled in by the SERVER', () => {",
+                  "  // Neither was in the request body. Both came from the Product",
+                  "  // Service, and both are now snapshotted onto the line.",
+                  "  pm.expect(b.items[0].unitPrice).to.be.a('string');",
+                  "  pm.expect(b.items[0].name).to.not.be.empty;",
+                  "});",
+                  "pm.test('lineTotal = unitPrice × quantity, exactly', () => {",
+                  "  const [item] = b.items;",
+                  "  const cents = Math.round(Number(item.unitPrice) * 100) * item.quantity;",
+                  "  pm.expect(item.lineTotal).to.eql((cents / 100).toFixed(2));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"quantity\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items"]
+            },
+            "description": "**The snapshot decision — the most consequential choice in this milestone.**\n\n`unitPrice` and `name` are copied from the catalogue at add-time, not looked up on every read.\n\n- **Live lookup**: always accurate, and the total silently changes while the customer looks at it. A £40 basket becomes £46 between the cart page and the checkout button, with no explanation. Cart reads also break when the Product Service is down.\n- **Snapshot**: the total is stable, the cart renders without the catalogue, and you have a record of *what the customer was actually shown* — which is what a dispute or a regulator asks for.\n\nThe cost is staleness, handled by **re-validating at checkout**: compare each snapshot against the live price and tell the customer what moved, rather than silently charging either figure. That belongs to the order workflow (M8).\n\nThe rule: **snapshot what the customer was shown; re-check before taking money.**\n\nAlso note this is the first service-to-service call that does not go through the gateway. Cart → Product, synchronously. Adding to a cart now fails if the catalogue is down — accepted, because the alternative is trusting a client-supplied price. Reading a cart never calls Product, because the snapshot is already there."
+          }
+        },
+        {
+          "name": "50 POST /cart/items again — upsert, not a second line",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('STILL one line — the quantity grew instead', () => {",
+                  "  pm.expect(b.items).to.have.lengthOf(1);",
+                  "  pm.expect(b.items[0].quantity).to.eql(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"quantity\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items"]
+            },
+            "description": "Adding a product already in the cart means \"one more of them\", not \"a second line for the same thing\".\n\nEnforced by a unique index on `(cart_id, product_id)` plus `INSERT ... ON CONFLICT DO UPDATE` — one statement, so two concurrent adds cannot interleave into a lost update.\n\nNote the snapshot fields are **not** overwritten on conflict. The price the customer first saw is the price that stays; re-reading it here would quietly reprice their basket, which is exactly what snapshotting exists to prevent."
+          }
+        },
+        {
+          "name": "51 Try to set your own price → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('the injected fields are named and refused', () => {",
+                  "  const m = pm.response.json().message.join(' ');",
+                  "  pm.expect(m).to.include('unitPrice');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"quantity\": 1,\n  \"unitPrice\": \"0.01\",\n  \"userId\": \"00000000-0000-4000-8000-000000000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items"]
+            },
+            "description": "**Two attacks in one request, both closed by the same mechanism.**\n\n`unitPrice: \"0.01\"` — buying a laptop for a penny. `userId` — writing into someone else's cart.\n\n`AddCartItemDto` declares neither field, so `whitelist` strips them and `forbidNonWhitelisted` turns the attempt into a loud 400 rather than a silent removal.\n\nBut the DTO is only the second line of defence. Even without it, the price comes from the Product Service and the user id comes from the verified token — neither is ever read from the body. **Never trust the client for anything that determines what someone pays or whose data they touch.**"
+          }
+        },
+        {
+          "name": "52 PATCH quantity — absolute, not a delta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('quantity is now exactly 5', () => {",
+                  "  pm.expect(pm.response.json().items[0].quantity).to.eql(5);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
+            },
+            "description": "An **absolute** quantity, deliberately.\n\nA delta (`{ \"change\": +1 }`) is not idempotent: a client that retries after a timeout adds twice, and the customer buys two laptops. An absolute value can be retried safely any number of times.\n\nMinimum is 1, not 0. Accepting 0 as \"remove\" would give two ways to do one thing, and a client sending 0 by accident would silently lose a line instead of getting an error. **DELETE means delete.**\n\nSend this twice and confirm the quantity stays 5."
+          }
+        },
+        {
+          "name": "53 DELETE a line",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the cart is empty again', () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.items).to.eql([]);",
+                  "  pm.expect(b.subtotal).to.eql('0.00');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
+            },
+            "description": "Returns the whole cart rather than 204, so the client can re-render without a follow-up GET. Every mutation on this resource does the same."
+          }
+        },
+        {
+          "name": "54 DELETE /cart — empty it, keep it",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('the cart SURVIVES — same id', () => {",
+                  "  pm.expect(b.id).to.eql(pm.environment.get('cartId'));",
+                  "  pm.expect(b.items).to.eql([]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "Removes the lines and **keeps the cart row**.\n\nDeleting it would work and would be wrong: the row carries the identity and creation time that abandonment analytics and recovery emails rely on. Carts are never deleted — they transition ACTIVE → CONVERTED or ABANDONED.\n\nThat is also the strongest argument for **PostgreSQL over Redis** here. \"Which carts contain the product we just discontinued?\" and \"email everyone with a cart older than a day\" are WHERE clauses in Postgres and full keyspace scans in Redis. Add durability (Redis loses up to a second on the default AOF setting) and transactional conversion to an order, and the supposed speed win — a few hundred microseconds on an operation already under a millisecond — stops being worth anything.\n\nRedis IS used in this milestone, for exactly one thing: caching token introspection at the gateway. That is the difference between using a tool because it fits and using it because it is installed."
           }
         }
       ]

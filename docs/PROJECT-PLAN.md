@@ -10,14 +10,14 @@ bring it back, rather than a vague "later".
 
 |                         |                                             |
 | ----------------------- | ------------------------------------------- |
-| **Milestones complete** | 5 of 15                                     |
-| **Services running**    | API Gateway, Auth, Product, Inventory       |
+| **Milestones complete** | 6 of 15                                     |
+| **Services running**    | Gateway, Auth, Product, Inventory, Cart     |
 | **Infrastructure**      | PostgreSQL 18, Redis 7                      |
 | **Databases**           | `ecommerce_auth_db`, `ecommerce_product_db` |
-| **Next milestone**      | 6 — Cart Service                            |
+| **Next milestone**      | 7 — RabbitMQ messaging                      |
 
 ```text
-M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ░░ M7 ░░ M8 ░░
+M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ░░ M8 ░░
 M9 ░░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
@@ -307,16 +307,65 @@ over.
 
 ---
 
-## ⬜ Milestone 6 — Cart Service
+## ✅ Milestone 6 — Cart Service
 
-**Next up.** Cart lifecycle, and a genuine evaluation of PostgreSQL vs Redis for cart
-storage rather than reaching for Redis because it is in the stack.
+**Status: complete.**
+
+### Delivered
+
+**Cart Service** (`:3004`, bound to `127.0.0.1`)
+
+- `carts` + `cart_items` in PostgreSQL, with a **partial unique index**
+  giving one active cart per user
+- Price and name **snapshotted** from the Product Service at add-time
+- `money.ts` — exact decimal arithmetic in integer minor units
+- Add is an UPSERT (`ON CONFLICT DO UPDATE`); PATCH sets an absolute
+  quantity; clearing empties the cart but keeps the row
+- Calls the Product Service directly — the first service-to-service hop that
+  does not go through the gateway
+
+**API Gateway** — the first **authenticated** resource
+
+- `AuthenticatedUserGuard`: verifies tokens by INTROSPECTING `/auth/me`,
+  with no signing-key sharing, cached in Redis for 30s under a SHA-256 hash
+  of the token
+- Forwards only the resolved user id as `X-User-Id`
+- Fails CLOSED when Auth is unreachable — the deliberate opposite of the rate
+  limiter's default
+
+### Key decisions
+
+| Decision                                  | Why                                                                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL, not Redis, for the cart       | Durable, queryable for abandonment analytics, transactional with order creation. The speed win was a few hundred microseconds on a sub-millisecond operation. |
+| Redis IS used — for token introspection   | The one thing here that is genuinely a cache: read-mostly, reconstructible, bounded staleness.                                                                |
+| Snapshot the price                        | Stable totals, renders without the catalogue, and a record of what the customer was shown. Re-validated at checkout (M8).                                     |
+| Integer minor units for arithmetic        | Float drift appears for _some_ prices and not others, so spot-checking proves nothing.                                                                        |
+| Absolute quantity on PATCH                | A delta is not idempotent: a retry after a timeout buys two laptops.                                                                                          |
+| No `:cartId` in any route                 | Removes insecure direct object reference structurally — there is no id to tamper with and no ownership check to forget.                                       |
+| Introspection, not local JWT verification | An HS256 key that can verify can also mint. RS256 remains the clean fix.                                                                                      |
+| Guard fails closed                        | Failing open on rate limiting is degradation; failing open on authentication is a complete bypass.                                                            |
+
+### Verified
+
+62 unit tests across seven projects, and the authentication chain end to end:
+no token → 401, tampered token → 401, valid token → reaches the Cart proxy.
+
+**A real bug found by that verification.** `@UseGuards(SomeGuard)`
+instantiates the guard in the module declaring the CONTROLLER, not the one
+providing it — so the guard picked up CartModule's HTTP client and sent every
+introspection to the Cart Service. Symptom: 503 for every token, valid or
+not. Fixed with a named, exported injection token.
+
+Also verified this milestone: `npm run demo:oversell` — **20 concurrent
+reservations against 1 unit, exactly 1 succeeded**. That was Milestone 5's
+outstanding claim.
 
 ---
 
 ## ⬜ Milestone 7 — RabbitMQ Messaging
 
-Exchanges, queues, bindings, routing keys, acknowledgements, prefetch, retry
+**Next up.** Exchanges, queues, bindings, routing keys, acknowledgements, prefetch, retry
 and dead-letter queues. Events: `UserRegistered`, `OrderCreated`,
 `OrderConfirmed`, `PaymentSucceeded`, `InventoryReserved`, and the rest.
 
@@ -430,7 +479,7 @@ readable on a server shared with other projects.
 | --------- | ------------------------ | ----------------------------- | -------------------- |
 | Auth      | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅ created, migrated |
 | Product   | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅ created, migrated |
-| Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ⏳ awaiting creation |
+| Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅ created, migrated |
 | Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | M6                   |
 | Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | M8                   |
 | Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | M9                   |
