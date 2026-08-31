@@ -19,6 +19,7 @@ export interface GatewayEnv {
   API_GLOBAL_PREFIX: string;
   AUTH_SERVICE_URL: string;
   PRODUCT_SERVICE_URL: string;
+  INVENTORY_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
 
   REDIS_URL: string;
@@ -41,6 +42,8 @@ export const gatewayEnvSchema = Joi.object({
   AUTH_SERVICE_URL: Joi.string().uri().required(),
 
   PRODUCT_SERVICE_URL: Joi.string().uri().required(),
+
+  INVENTORY_SERVICE_URL: Joi.string().uri().required(),
 
   // Every outbound call needs a deadline. Without one, a hung downstream
   // service holds a gateway request open indefinitely; enough of those and the

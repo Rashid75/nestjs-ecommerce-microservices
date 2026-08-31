@@ -27,3 +27,6 @@ export * from './lib/catalog/product-status.enum';
 export * from './lib/catalog/category.dto';
 export * from './lib/catalog/product.dto';
 export * from './lib/catalog/query-products.dto';
+
+// --- inventory ---
+export * from './lib/inventory/inventory.dto';

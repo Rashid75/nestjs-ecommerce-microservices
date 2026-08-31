@@ -4,10 +4,10 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 4 — Redis and Caching.**
-> Three services, two PostgreSQL databases, JWT authentication, a full
-> catalogue API, cache-aside over Redis and Redis-backed rate limiting. No
-> cart, orders or RabbitMQ yet.
+> **Current status: Milestone 5 — Inventory Service.**
+> Four services, three PostgreSQL databases, JWT authentication, a catalogue
+> API with Redis caching, Redis-backed rate limiting, and concurrency-safe
+> stock. No cart, orders or RabbitMQ yet.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -48,14 +48,16 @@ item back.
            │ HTTP (axios, 5s timeout, honest failure mapping)
      ┌─────┴───────────────┐
      ▼                     ▼
-┌────────────────┐  ┌──────────────────┐
-│  Auth  :3001   │  │  Product  :3002  │   both bound to 127.0.0.1
-└───────┬────────┘  └────────┬─────────┘
-        │ Sequelize          │ Sequelize
-        ▼                    ▼
-┌──────────────────┐  ┌──────────────────────┐
-│ ecommerce_auth_db│  │ ecommerce_product_db │  schema from migrations only
-└──────────────────┘  └──────────────────────┘
+┌──────────────┐ ┌────────────────┐ ┌──────────────────┐
+│  Auth :3001  │ │ Product :3002  │ │ Inventory :3003  │  all 127.0.0.1
+└──────┬───────┘ └───────┬────────┘ └────────┬─────────┘
+       │ Sequelize       │ Sequelize         │ Sequelize
+       ▼                 ▼                   ▼
+┌──────────────┐ ┌────────────────┐ ┌────────────────────┐
+│ ecommerce_   │ │ ecommerce_     │ │ ecommerce_         │
+│   auth_db    │ │   product_db   │ │   inventory_db     │
+└──────────────┘ └────────────────┘ └────────────────────┘
+                          schema from migrations only
 
            Redis :6379
   ecom:gateway:*   rate-limit counters   REQUIRED by the gateway
@@ -154,7 +156,7 @@ ecommerce/
 │   │       ├── config/
 │   │       └── main.ts
 │   │
-│   └── product/                      INTERNAL · 3002 · inspector 9231
+│   ├── product/                      INTERNAL · 3002 · inspector 9231
 │       ├── .sequelizerc
 │       └── src/
 │           ├── products/             model, repository, service, controller
@@ -162,6 +164,14 @@ ecommerce/
 │           ├── categories/           model, repository, service, controller
 │           ├── common/domain-errors.ts
 │           ├── database/             connection + migrations
+│           ├── config/
+│           └── main.ts
+│   │
+│   └── inventory/                    INTERNAL · 3003 · inspector 9232
+│       └── src/
+│           ├── inventory/            models, repository, service, controller
+│           │   └── inventory.repository.ts   the atomic reserve statement
+│           ├── database/             migrations: items + ledger
 │           ├── config/
 │           └── main.ts
 │
@@ -178,7 +188,9 @@ ecommerce/
 │
 ├── docs/PROJECT-PLAN.md              milestones, progress, deferred items
 ├── postman/                          collection + local environment
-├── tools/free-ports.mjs              kills orphaned dev servers
+├── tools/
+│   ├── free-ports.mjs                kills orphaned dev servers
+│   └── oversell-demo.mjs             concurrent reservation proof
 ├── .env.example                      committed template, no real secrets
 ├── .env                              local values, git-ignored
 ├── eslint.config.mjs                 module boundary rules
@@ -231,14 +243,14 @@ npm start
 Every PostgreSQL object this project creates is prefixed **`ecommerce_`** —
 both the database and the login role:
 
-| Service          | Database                 | Owning role                   | Status |
-| ---------------- | ------------------------ | ----------------------------- | ------ |
-| Auth             | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅     |
-| Product          | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅     |
-| Inventory _(M5)_ | `ecommerce_inventory_db` | `ecommerce_inventory_service` | —      |
-| Cart _(M6)_      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | —      |
-| Order _(M8)_     | `ecommerce_order_db`     | `ecommerce_order_service`     | —      |
-| Payment _(M9)_   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | —      |
+| Service        | Database                 | Owning role                   | Status |
+| -------------- | ------------------------ | ----------------------------- | ------ |
+| Auth           | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅     |
+| Product        | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅     |
+| Inventory      | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅     |
+| Cart _(M6)_    | `ecommerce_cart_db`      | `ecommerce_cart_service`      | —      |
+| Order _(M8)_   | `ecommerce_order_db`     | `ecommerce_order_service`     | —      |
+| Payment _(M9)_ | `ecommerce_payment_db`   | `ecommerce_payment_service`   | —      |
 
 Databases are namespaced per cluster, but **roles in PostgreSQL are
 cluster-wide**. A bare `auth_service` would share a namespace with every other
@@ -564,6 +576,16 @@ connects lazily and every cache operation fails open. PostgreSQL, by
 contrast, is proven at boot — a service without its database cannot do its
 job at all, and should refuse to start.
 
+**Stock is never cached.** The Inventory Service has no `REDIS_URL`. A
+cached `available: 1` is not a slightly stale product name — it is a promise
+the warehouse cannot keep, and the staleness window is exactly the window in
+which the last unit gets sold twice.
+
+**The availability check and the write are one statement.** A transaction
+alone does not close a check-then-act race: under READ COMMITTED a plain
+SELECT takes no lock, so two transactions both read "1 available" and both
+proceed. Atomicity is not mutual exclusion.
+
 **Invalidate by generation, never by scanning.** `KEYS` blocks
 single-threaded Redis across the whole keyspace. Embedding a counter in the
 key and incrementing it invalidates every list page in O(1).
@@ -582,9 +604,10 @@ sequelize-typescript installs and every property silently reads `undefined`.
 Stated plainly, tracked with triggers in
 [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md):
 
-1. **Catalogue write endpoints are unauthenticated.** Anyone who can reach the
-   gateway can create, edit and delete products. Deliberate — closing it needs
-   the RS256 decision — but this stack **must not be exposed beyond
+1. **Catalogue AND inventory write endpoints are unauthenticated.** Anyone
+   reaching the gateway can create, edit and delete products — and invent or
+   destroy stock outright via `receive` and `adjust`, or cancel someone
+   else's reservation via `release`. This stack **must not be exposed beyond
    localhost**.
 2. **Rate limiting is per-IP only** and fails open when Redis is down. It
    raises the cost of credential stuffing; it does not stop a distributed
@@ -592,7 +615,11 @@ Stated plainly, tracked with triggers in
 3. **No RBAC**, though `role` is already a claim and a column.
 4. **No audit logging** of authentication or catalogue mutations.
 5. **No correlation IDs** — a request cannot yet be traced across services.
-6. **`.env` holds development secrets** that have appeared in a terminal
+6. **Reservations never expire.** An abandoned cart holds stock indefinitely.
+   Needs per-order reservation records with a TTL (M6/M8).
+7. **Stock operations are not idempotent.** Retrying a reserve after a
+   timeout double-reserves (M8).
+8. **`.env` holds development secrets** that have appeared in a terminal
    transcript. Rotate before any shared environment.
 
 ---
@@ -620,6 +647,13 @@ values in `.env` do not match the role in PostgreSQL. Note that PostgreSQL
 reports a _nonexistent_ role with this same message.
 
 **`relation "products" does not exist`** — run `npm run db:migrate`.
+
+**`409 Insufficient stock` when you expected success** — the response body
+carries `requested` and `available`. Check the ledger with
+`GET /api/inventory/:productId/movements` to see what consumed the stock.
+
+**`npm run demo:oversell` reports 429s** — `reserve` is limited to 30/min.
+Wait a minute, or lower `--concurrency`.
 
 **`Unknown authentication strategy "jwt"`** — `JwtStrategy` is missing from a
 module's `providers`. Instantiation is what registers it with Passport.

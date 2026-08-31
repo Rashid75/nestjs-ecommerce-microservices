@@ -1,0 +1,24 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+/**
+ * sequelize-cli reads `.sequelizerc` from its CURRENT WORKING DIRECTORY, and
+ * any relative path inside it is also resolved against that cwd. That is the
+ * trap in a monorepo: run the CLI from the workspace root and it would look
+ * for ./src/database/... at the root instead of under apps/inventory.
+ *
+ * Every path below is therefore absolute, resolved from __dirname
+ * (apps/inventory), so the CLI behaves identically whether it is invoked by an npm
+ * script from the workspace root or by hand from this directory.
+ *
+ * `models-path` is deliberately NOT set. We never use sequelize-cli to
+ * generate models — models are hand-written sequelize-typescript classes that
+ * live beside the feature that owns them. Models and migrations are separate
+ * concerns: the migration is the history of the schema, the model is how this
+ * process reads and writes it.
+ */
+const path = require('node:path');
+
+module.exports = {
+  config: path.resolve(__dirname, 'src', 'database', 'sequelize-cli.config.js'),
+  'migrations-path': path.resolve(__dirname, 'src', 'database', 'migrations'),
+  'seeders-path': path.resolve(__dirname, 'src', 'database', 'seeders'),
+};

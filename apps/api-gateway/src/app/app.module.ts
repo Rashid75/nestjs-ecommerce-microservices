@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from '../auth/auth.module';
 import { CatalogModule } from '../catalog/catalog.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { RateLimitGuard } from '../common/rate-limit.guard';
 import type { GatewayEnv } from '../config/env.validation';
 import { gatewayEnvSchema } from '../config/env.validation';
@@ -37,6 +38,7 @@ import { gatewayEnvSchema } from '../config/env.validation';
 
     AuthModule,
     CatalogModule,
+    InventoryModule,
   ],
   providers: [
     // GLOBAL, not per-controller, and that direction matters.

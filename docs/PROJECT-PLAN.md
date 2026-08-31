@@ -10,14 +10,14 @@ bring it back, rather than a vague "later".
 
 |                         |                                             |
 | ----------------------- | ------------------------------------------- |
-| **Milestones complete** | 4 of 15                                     |
-| **Services running**    | API Gateway, Auth, Product                  |
+| **Milestones complete** | 5 of 15                                     |
+| **Services running**    | API Gateway, Auth, Product, Inventory       |
 | **Infrastructure**      | PostgreSQL 18, Redis 7                      |
 | **Databases**           | `ecommerce_auth_db`, `ecommerce_product_db` |
-| **Next milestone**      | 5 — Inventory Service                       |
+| **Next milestone**      | 6 — Cart Service                            |
 
 ```text
-M1 ██ M2 ██ M3 ██ M4 ██ M5 ░░ M6 ░░ M7 ░░ M8 ░░
+M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ░░ M7 ░░ M8 ░░
 M9 ░░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
@@ -51,12 +51,12 @@ This is a **learning project**. The rules it runs under:
            │ HTTP (axios, 5s timeout, honest failure mapping)
      ┌─────┴──────┐
      ▼            ▼
-┌──────────┐  ┌─────────────┐
-│Auth :3001│  │Product :3002│   both bound to 127.0.0.1
-└────┬─────┘  └──────┬──────┘
-     ▼               ▼
- ecommerce_      ecommerce_
-  auth_db        product_db
+┌──────────┐  ┌─────────────┐  ┌───────────────┐
+│Auth :3001│  │Product :3002│  │Inventory :3003│  all on 127.0.0.1
+└────┬─────┘  └──────┬──────┘  └───────┬───────┘
+     ▼               ▼                 ▼
+ ecommerce_      ecommerce_       ecommerce_
+  auth_db        product_db       inventory_db
 
 Redis :6379   ecom:gateway:*  rate-limit counters (required)
               ecom:product:*  cache-aside entries (optional, fails open)
@@ -254,17 +254,62 @@ fail-open path, confirmed end to end.
 
 ---
 
-## ⬜ Milestone 5 — Inventory Service
+## ✅ Milestone 5 — Inventory Service
 
-**Next up.** Concurrency-safe stock: increase, decrease, reserve, release. Transactions,
-isolation levels, row locking (`SELECT ... FOR UPDATE`), and the overselling
-race condition demonstrated before it is fixed.
+**Status: complete.**
+
+### Delivered
+
+**Inventory Service** (`:3003`, bound to `127.0.0.1`)
+
+- `inventory_items` — one row per product: `onHand`, `reserved`, a
+  `version` counter, and **no foreign key** to `products` (different
+  database — that absence is the design)
+- `stock_movements` — an append-only ledger with signed quantities and the
+  balances captured after each movement
+- Three CHECK constraints, including the anti-overselling invariant
+  `quantity_reserved <= quantity_on_hand`
+- Operations: receive, reserve, release, fulfil, adjust — each one atomic,
+  each one writing balance and ledger in the SAME transaction
+- `reserveWithPessimisticLock()` kept unwired, purely to read beside the
+  production path
+- **No Redis**: stock is the one thing in this system that must never be
+  cached
+
+**API Gateway** — `/api/inventory/*`, with a 30/min budget on `reserve`
+because inventory exhaustion is a denial of service against the _business_,
+not the infrastructure.
+
+**`tools/oversell-demo.mjs`** — fires N concurrent reservations at one unit
+and asserts exactly one succeeds. The only thing that can actually prove the
+race is closed.
+
+### Key decisions
+
+| Decision                                   | Why                                                                                                                                            |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Atomic conditional UPDATE for reserve      | The check lives in the WHERE clause, so there is no window between deciding and acting. One round trip, no lock held across application logic. |
+| Not `SELECT ... FOR UPDATE` as the default | Correct, but holds a lock for as long as the application takes to decide. Reserve for decisions spanning several rows.                         |
+| A transaction alone is NOT enough          | Under READ COMMITTED a plain SELECT takes no lock. Atomicity is not mutual exclusion — the most common misunderstanding in this area.          |
+| `available` derived, never stored          | A stored third column drifts, and then you cannot tell which of the three is wrong.                                                            |
+| Reserve does not touch `onHand`            | Until goods ship they are physically on the shelf. Decrementing early makes the system disagree with the warehouse.                            |
+| Append-only ledger                         | "We have 7" is not an answer to "why 7?". Also where idempotency lives in M8.                                                                  |
+| Invariants as CHECK constraints            | They hold for every writer — including psql and a 2am data-fix script. Application validation only protects callers that use the application.  |
+| 409, not 400, for insufficient stock       | The request was well formed; it lost a race. A client reading 409 knows a retry may work.                                                      |
+| No cache on stock                          | A cached `available: 1` is a promise the warehouse cannot keep.                                                                                |
+
+### Verified
+
+45 unit tests across five projects. The concurrency property itself is
+verified by `npm run demo:oversell` against a running stack — unit tests
+cannot demonstrate a race, because a mocked repository has no rows to contend
+over.
 
 ---
 
 ## ⬜ Milestone 6 — Cart Service
 
-Cart lifecycle, and a genuine evaluation of PostgreSQL vs Redis for cart
+**Next up.** Cart lifecycle, and a genuine evaluation of PostgreSQL vs Redis for cart
 storage rather than reaching for Redis because it is in the stack.
 
 ---
@@ -384,8 +429,8 @@ readable on a server shared with other projects.
 | Service   | Database                 | Role                          | Status               |
 | --------- | ------------------------ | ----------------------------- | -------------------- |
 | Auth      | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅ created, migrated |
-| Product   | `ecommerce_product_db`   | `ecommerce_product_service`   | ⏳ awaiting creation |
-| Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | M5                   |
+| Product   | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅ created, migrated |
+| Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ⏳ awaiting creation |
 | Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | M6                   |
 | Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | M8                   |
 | Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | M9                   |

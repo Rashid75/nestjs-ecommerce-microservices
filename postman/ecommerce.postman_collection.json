@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
     "name": "E-Commerce Microservices",
-    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 4 — Gateway + Auth + Product, with Redis caching and rate limiting.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 5 — Gateway + Auth + Product + Inventory, with Redis caching and rate limiting.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -1612,6 +1612,488 @@
               "path": ["{{apiPrefix}}", "categories"]
             },
             "description": "Rate limiting is applied by a GLOBAL guard, so every route has a budget by default — 100 per minute unless a route declares otherwise with `@RateLimit()`.\n\nGlobal, not per-controller, and the direction matters. A guard applied route by route fails OPEN when someone forgets it: the new endpoint is simply unlimited and nothing tells you. Applied globally it fails CLOSED — a new endpoint inherits the default, and anything needing an exception has to say so out loud.\n\nThe three headers let a well-behaved client pace itself instead of discovering the limit by hitting it. GitHub, Stripe and Twitter all publish exactly this trio."
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 · Inventory & concurrency",
+      "description": "**Run folder 5 first** — these reuse the product it created.\n\nThe story: register stock, receive goods, reserve them for an order, watch the invariants refuse the impossible, then ship.\n\nThree numbers, and only one is interesting:\n\n- `onHand` — physically in the warehouse\n- `reserved` — promised to pending orders, still physically present\n- `available` — `onHand − reserved`, **derived, never stored**\n\nA stored third column can drift out of agreement with the other two, and when it does you cannot tell which is wrong. Deriving it makes the invariant structural.\n\n**The concurrency proof is not here.** A race needs real simultaneous connections, which Postman cannot produce. Run `npm run demo:oversell` — see request 45.",
+      "item": [
+        {
+          "name": "35 Register the product with inventory",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('opens at zero — nothing arrives by magic', () => {",
+                  "  pm.expect(b.onHand).to.eql(0);",
+                  "  pm.expect(b.reserved).to.eql(0);",
+                  "  pm.expect(b.available).to.eql(0);",
+                  "});",
+                  "pm.environment.set('inventoryId', b.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"sku\": \"{{productSku}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory"]
+            },
+            "description": "Creates the stock row for a product that already exists in the catalogue.\n\nNote there is **no foreign key** to `products`. That table lives in `ecommerce_product_db`; this one lives in `ecommerce_inventory_db`, and PostgreSQL cannot enforce referential integrity across databases.\n\nThat is not a limitation being worked around — it is the point of database-per-service. What we give up: the database can no longer guarantee this `productId` is real. What we get: the Product Service can be changed, split or rewritten without a lock in its database ever blocking a write in ours.\n\nConsistency becomes **eventual** and the application's job: validate where cheap, reconcile periodically, and react to `ProductDeleted` events once RabbitMQ exists.\n\n`sku` is deliberately **denormalised** — copied so a warehouse operator reading this table at 3am does not need a second service to be reachable to know what a row refers to. It is a label, never read to make a decision."
+          }
+        },
+        {
+          "name": "36 Receive 10 units",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('on-hand rose to 10', () => pm.expect(b.onHand).to.eql(10));",
+                  "pm.test('all of it is available', () => pm.expect(b.available).to.eql(10));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 10,\n  \"reference\": \"PO-2026-0042\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/receive",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "receive"]
+            },
+            "description": "Goods arrived. The only operation that can never fail on availability — receiving only ever adds.\n\n`quantity` is always **positive**; the operation decides the direction. Allowing a negative here would let `receive` secretly become a write-off and bypass every availability guard below it.\n\nThe `reference` lands in the ledger. Six months later, \"where did these ten units come from?\" is answerable."
+          }
+        },
+        {
+          "name": "37 Reserve 3 for an order",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "",
+                  "pm.test('reserved rose to 3', () => pm.expect(b.reserved).to.eql(3));",
+                  "",
+                  "pm.test('on-hand is UNCHANGED at 10', () => {",
+                  "  // The units are promised, not gone. They are still physically on",
+                  "  // the shelf, and decrementing here would make the system disagree",
+                  "  // with the warehouse. Only fulfilment reduces on-hand.",
+                  "  pm.expect(b.onHand).to.eql(10);",
+                  "});",
+                  "",
+                  "pm.test('available fell to 7', () => pm.expect(b.available).to.eql(7));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 3,\n  \"reference\": \"order:demo-1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/reserve",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "reserve"]
+            },
+            "description": "**The operation the whole service exists to protect.**\n\nUnder the hood this is ONE statement:\n\n```sql\nUPDATE inventory_items\n   SET quantity_reserved = quantity_reserved + :n\n WHERE product_id = :id\n   AND (quantity_on_hand - quantity_reserved) >= :n\nRETURNING ...\n```\n\nThe availability check lives in the `WHERE` clause, so there is no gap between deciding and acting for another transaction to slip into. Either one row matches or zero do, and zero is a definitive answer rather than a guess.\n\nThe naive version — `SELECT` the quantity, check it in JavaScript, then `UPDATE` — is a check-then-act race. Two customers both read \"1 available\", both pass the check, and both are told yes. **Wrapping those three steps in a transaction does not fix it**: under PostgreSQL's default READ COMMITTED isolation a plain `SELECT` takes no lock, so both still read 1. A transaction gives you atomicity, which is not the same as mutual exclusion — and believing otherwise is the most common misunderstanding in this area."
+          }
+        },
+        {
+          "name": "38 Reserve more than exists → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict, not 400', () => {",
+                  "  // The request was perfectly well formed. It failed on current",
+                  "  // state — and a client reading 409 knows a retry may work once",
+                  "  // other reservations are released. A retry after 400 never will.",
+                  "  pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "const b = pm.response.json();",
+                  "pm.test('tells the client the actual numbers', () => {",
+                  "  pm.expect(b.requested).to.eql(99);",
+                  "  pm.expect(b.available).to.eql(7);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 99,\n  \"reference\": \"order:too-greedy\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/reserve",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "reserve"]
+            },
+            "description": "The `WHERE` clause matches zero rows, so the reservation is refused.\n\nThe response carries both `requested` and `available`, because \"no\" is much less useful than \"no, there are 7\". A cart UI can offer the seven immediately instead of making the customer guess.\n\nOn the failure path only, the service pays for one extra `SELECT` to distinguish \"this product has no inventory row\" (404) from \"the row exists and has too little\" (409). The happy path stays a single statement."
+          }
+        },
+        {
+          "name": "39 Release 1 back",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('reserved fell to 2, on-hand still 10', () => {",
+                  "  pm.expect(b.reserved).to.eql(2);",
+                  "  pm.expect(b.onHand).to.eql(10);",
+                  "  pm.expect(b.available).to.eql(8);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1,\n  \"reference\": \"order:demo-1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/release",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "release"]
+            },
+            "description": "An abandoned cart or a cancelled order. The promise is withdrawn; the goods never moved.\n\nGuarded by `AND quantity_reserved >= :n`. Without it a buggy caller could release more than was ever reserved, drive the counter negative, and silently invent available stock. The `CHECK (quantity_reserved >= 0)` constraint would catch that too — but as a 500 rather than a clear 409, and a control is more useful when it fires at the layer that can explain it."
+          }
+        },
+        {
+          "name": "40 Fulfil 2 — the goods ship",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "",
+                  "pm.test('BOTH counters dropped', () => {",
+                  "  pm.expect(b.onHand).to.eql(8);    // 10 − 2, the units left",
+                  "  pm.expect(b.reserved).to.eql(0);  // 2 − 2, the promise is kept",
+                  "});",
+                  "",
+                  "pm.test('available is unchanged at 8', () => {",
+                  "  // Nothing became more or less available: the units that shipped",
+                  "  // were already spoken for. That is the whole reason reserving",
+                  "  // does not touch on-hand.",
+                  "  pm.expect(b.available).to.eql(8);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 2,\n  \"reference\": \"order:demo-1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/fulfil",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "fulfil"]
+            },
+            "description": "The only operation in the normal flow that reduces `onHand`.\n\nWatch `available`: it does not move. The two units that shipped were already reserved, so they were never available to anyone else. If reserving had decremented `onHand` instead, this operation would have double-counted and the figures would have drifted."
+          }
+        },
+        {
+          "name": "41 Adjust −1 for breakage",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('on-hand fell to 7', () => {",
+                  "  pm.expect(pm.response.json().onHand).to.eql(7);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delta\": -1,\n  \"reason\": \"damaged in handling\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/adjust",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "adjust"]
+            },
+            "description": "A manual correction — a stock count, breakage, a return.\n\nSeparate from `receive` for two reasons: the sign is meaningful, and **`reason` is mandatory**. An unexplained adjustment is indistinguishable from theft or a bug, so the API refuses to accept one.\n\nTry sending `{ \"delta\": -1 }` with no reason: 400."
+          }
+        },
+        {
+          "name": "42 Adjustment that would break the invariant → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('the promise to customers is protected', () => {",
+                  "  pm.expect(pm.response.json().message).to.match(/stock/i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delta\": -1000,\n  \"reason\": \"warehouse flood\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/adjust",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "adjust"]
+            },
+            "description": "Writing off more than exists is refused twice over.\n\nFirst by the statement's guard: `AND (quantity_on_hand + :delta) >= quantity_reserved`. Writing off damaged goods must not invalidate promises already made to customers — that failure would otherwise surface days later as an order that cannot ship.\n\nSecond, if that guard were ever removed, by the database itself:\n\n```sql\nCHECK (quantity_reserved <= quantity_on_hand)\n```\n\nThat constraint is the **anti-overselling invariant**, and it is the only control here that cannot be bypassed. It holds for every writer — this service, a psql session, a data-fix script written under pressure at 2am. Application validation only protects callers that go through the application, which is a strictly smaller set than \"everyone\"."
+          }
+        },
+        {
+          "name": "43 Read the ledger",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json();",
+                  "",
+                  "pm.test('every movement was recorded', () => {",
+                  "  const types = rows.map((r) => r.type);",
+                  "  ['RECEIVE', 'RESERVE', 'RELEASE', 'FULFIL', 'ADJUST'].forEach((t) =>",
+                  "    pm.expect(types).to.include(t));",
+                  "});",
+                  "",
+                  "pm.test('quantities are SIGNED', () => {",
+                  "  const release = rows.find((r) => r.type === 'RELEASE');",
+                  "  pm.expect(release.quantity).to.be.below(0);",
+                  "  const receive = rows.find((r) => r.type === 'RECEIVE');",
+                  "  pm.expect(receive.quantity).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('each entry captured the balances after it', () => {",
+                  "  rows.forEach((r) => {",
+                  "    pm.expect(r).to.have.property('onHandAfter');",
+                  "    pm.expect(r).to.have.property('reservedAfter');",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/movements",
+              "host": ["{{gatewayUrl}}"],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "movements"
+              ]
+            },
+            "description": "**Why keep a ledger when the balance is right there?**\n\nBecause \"we have 7 units\" is not an answer to \"why do we have 7?\". A balance with no history cannot be audited, cannot be reconciled against a physical count, and cannot tell you whether a discrepancy came from a bug, a mis-scan or theft.\n\nEvery real inventory, accounting and banking system is a ledger with a cached balance — never a balance alone.\n\nQuantities are **signed**, so `SUM(quantity)` reconstructs the balance. If the sum and the stored figure ever disagree, the ledger is right and the balance is the bug.\n\nEach row also stores `onHandAfter` / `reservedAfter`. Strictly redundant — you could replay the history — but during an incident, \"what did this row look like right after that movement?\" should be a `SELECT`, not a fold over history.\n\nThis is also where **idempotency** will live in Milestone 8: \"have I already reserved stock for order X?\" is a question only the ledger can answer."
+          }
+        },
+        {
+          "name": "44 Current position",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('available is always onHand − reserved', () => {",
+                  "  pm.expect(b.available).to.eql(b.onHand - b.reserved);",
+                  "});",
+                  "pm.test('the invariant holds: reserved never exceeds onHand', () => {",
+                  "  pm.expect(b.reserved).to.be.at.most(b.onHand);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
+            },
+            "description": "The current stock position.\n\n**This response is never cached**, and that is deliberate — the sharpest example in the project of \"do not cache everything\". The Inventory Service has no `REDIS_URL` at all.\n\nA cached `available: 1` is not a slightly stale product name. It is a promise to a customer that the warehouse cannot keep, and the staleness window is exactly the window in which the last unit gets sold twice.\n\nIf read load here ever became a real problem, the answer would be a read replica or a coarse in-stock/out-of-stock flag with a very short TTL — never the exact number."
+          }
+        },
+        {
+          "name": "45 ⚡ Concurrency proof — read this, then run the script",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "console.log('');",
+                  "console.log('Postman cannot demonstrate a race — requests here are');",
+                  "console.log('sequential. Run this instead, from the repo root:');",
+                  "console.log('');",
+                  "console.log('    npm run demo:oversell');",
+                  "console.log('');",
+                  "console.log('It creates a product with ONE unit, fires 20 simultaneous');",
+                  "console.log('reservations, and asserts that exactly one succeeded.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
+            },
+            "description": "## The proof lives outside Postman\n\nA race condition needs genuinely simultaneous connections contending over the same row. Postman sends requests one after another, and the Collection Runner is no different — so nothing in this collection can demonstrate overselling or its absence.\n\nRun this from the repo root instead:\n\n```\nnpm run demo:oversell\n```\n\nIt creates a fresh product with **exactly one unit**, fires 20 concurrent reservations with `Promise.all`, and reports how many succeeded. A correct service allows exactly one:\n\n```\n  200 OK        1   reservation granted\n  409 Conflict  19  insufficient stock — lost the race\n  ✓ CORRECT\n```\n\nVary it:\n\n```\nnpm run demo:oversell -- --concurrency 50 --stock 3\n```\n\n### See the lock with your own eyes\n\nThe other worthwhile experiment needs two psql sessions. In the first:\n\n```sql\nBEGIN;\nSELECT quantity_on_hand, quantity_reserved\n  FROM inventory_items WHERE sku = 'YOUR-SKU' FOR UPDATE;\n```\n\nIn the second, run the identical statement. **It blocks** — visibly, indefinitely — until you `COMMIT` or `ROLLBACK` the first. That is pessimistic locking: the race is closed by serialising the two transactions.\n\nThen try it without `FOR UPDATE`. Both return instantly, both see the same number, and both would happily proceed to sell the same unit. That difference is the entire milestone."
           }
         }
       ]
