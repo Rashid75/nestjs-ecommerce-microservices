@@ -13,12 +13,6 @@ import {
   HttpStatus,
   Post,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
 import { RateLimit } from '../common/rate-limit.decorator';
 import { AuthProxyService } from './auth-proxy.service';
 
@@ -39,12 +33,9 @@ import { AuthProxyService } from './auth-proxy.service';
  * not redundant work:
  *
  *   - a malformed body is rejected without a network hop;
- *   - the gateway's Swagger document is accurate, because it is generated from
- *     the real DTO rather than hand-written;
  *   - and the Auth Service still validates independently, because a service
  *     that trusts its caller is only as safe as its least careful caller.
  */
-@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly proxy: AuthProxyService) {}
@@ -54,11 +45,6 @@ export class AuthController {
   // bcrypt at cost 12 (~250ms of CPU), so it is both expensive and a
   // spam-signup target.
   @RateLimit({ limit: 5, windowSeconds: 900, name: 'auth:register' })
-  @ApiOperation({ summary: 'Create an account and receive an access token' })
-  @ApiResponse({ status: 201, type: AuthResponseDto })
-  @ApiResponse({ status: 400, description: 'Validation failed' })
-  @ApiResponse({ status: 409, description: 'Email already registered' })
-  @ApiResponse({ status: 503, description: 'Auth service unavailable' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
     return this.proxy.register(dto);
   }
@@ -81,10 +67,6 @@ export class AuthController {
   // milestone. Rate limiting raises the cost; it does not close the door.
   @RateLimit({ limit: 5, windowSeconds: 60, name: 'auth:login' })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Exchange email and password for an access token' })
-  @ApiResponse({ status: 200, type: AuthResponseDto })
-  @ApiResponse({ status: 401, description: 'Invalid email or password' })
-  @ApiResponse({ status: 429, description: 'Too many attempts' })
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.proxy.login(dto);
   }
@@ -95,13 +77,6 @@ export class AuthController {
    * forwards the header and reports whatever the Auth Service decides.
    */
   @Get('me')
-  @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: 'Return the authenticated user' })
-  @ApiResponse({ status: 200, type: UserProfileDto })
-  @ApiResponse({
-    status: 401,
-    description: 'Missing, expired or invalid token',
-  })
   me(
     @Headers('authorization') authorization?: string,
   ): Promise<UserProfileDto> {

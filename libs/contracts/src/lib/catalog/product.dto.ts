@@ -1,4 +1,3 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsEnum,
@@ -23,19 +22,12 @@ import { PageMetaDto } from '../common/pagination.dto';
 export const MAX_PRICE = 9_999_999_999.99;
 
 export class ProductDto {
-  @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ example: 'ThinkPad X1 Carbon' })
   name!: string;
 
-  @ApiProperty({ type: String, nullable: true })
   description!: string | null;
 
-  @ApiProperty({
-    example: 'LAP-X1C-14-2026',
-    description: 'Stock Keeping Unit. Unique across live products.',
-  })
   sku!: string;
 
   /**
@@ -57,63 +49,40 @@ export class ProductDto {
    * matters. For a catalogue that displays a price, an exact decimal string
    * is honest and enough.
    */
-  @ApiProperty({
-    type: String,
-    example: '1899.00',
-    description: 'Exact decimal string. Do not parse as a float for money.',
-  })
   price!: string;
 
-  @ApiProperty({ example: 'USD', description: 'ISO 4217 currency code.' })
   currency!: string;
 
-  @ApiProperty({ enum: ProductStatus, enumName: 'ProductStatus' })
   status!: ProductStatus;
 
-  @ApiProperty({ format: 'uuid' })
   categoryId!: string;
 
-  @ApiPropertyOptional({
-    type: CategoryDto,
-    description: 'Included only on single-product reads.',
-  })
   category?: CategoryDto;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   createdAt!: Date;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   updatedAt!: Date;
 }
 
-/** The paginated listing envelope, spelled out concretely for Swagger. */
+/** The paginated listing envelope returned by `GET /products`. */
 export class PaginatedProductsDto {
-  @ApiProperty({ type: [ProductDto] })
   items!: ProductDto[];
 
-  @ApiProperty({ type: PageMetaDto })
   meta!: PageMetaDto;
 }
 
 export class CreateProductDto {
-  @ApiProperty({ example: 'ThinkPad X1 Carbon', maxLength: 200 })
   @IsString()
   @MinLength(2)
   @MaxLength(200)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   name!: string;
 
-  @ApiPropertyOptional({ maxLength: 5000 })
   @IsOptional()
   @IsString()
   @MaxLength(5000)
   description?: string;
 
-  @ApiProperty({
-    example: 'LAP-X1C-14-2026',
-    maxLength: 64,
-    description: 'Uppercase letters, digits, hyphens and underscores.',
-  })
   @IsString()
   @MinLength(3)
   @MaxLength(64)
@@ -129,12 +98,6 @@ export class CreateProductDto {
   })
   sku!: string;
 
-  @ApiProperty({
-    example: 1899.0,
-    minimum: 0,
-    maximum: MAX_PRICE,
-    description: 'At most 2 decimal places. Stored as an exact decimal.',
-  })
   @Type(() => Number)
   // maxDecimalPlaces is enforced here rather than left to the database,
   // which would silently ROUND 19.999 to 20.00. Silently changing a price
@@ -144,11 +107,6 @@ export class CreateProductDto {
   @Max(MAX_PRICE)
   price!: number;
 
-  @ApiPropertyOptional({
-    example: 'USD',
-    default: 'USD',
-    description: 'ISO 4217 code, three uppercase letters.',
-  })
   @IsOptional()
   @IsString()
   @Transform(({ value }) =>
@@ -157,25 +115,16 @@ export class CreateProductDto {
   @Matches(/^[A-Z]{3}$/, { message: 'currency must be a 3-letter ISO code' })
   currency?: string;
 
-  @ApiPropertyOptional({
-    enum: ProductStatus,
-    enumName: 'ProductStatus',
-    default: ProductStatus.Draft,
-    description:
-      'New products default to DRAFT so nothing goes live by accident.',
-  })
   @IsOptional()
   @IsEnum(ProductStatus)
   status?: ProductStatus;
 
-  @ApiProperty({ format: 'uuid' })
   @IsUUID('4')
   categoryId!: string;
 }
 
 /** Partial update. See the note on UpdateCategoryDto for why every field is optional. */
 export class UpdateProductDto {
-  @ApiPropertyOptional({ maxLength: 200 })
   @IsOptional()
   @IsString()
   @MinLength(2)
@@ -183,13 +132,11 @@ export class UpdateProductDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   name?: string;
 
-  @ApiPropertyOptional({ maxLength: 5000 })
   @IsOptional()
   @IsString()
   @MaxLength(5000)
   description?: string;
 
-  @ApiPropertyOptional({ maxLength: 64 })
   @IsOptional()
   @IsString()
   @MinLength(3)
@@ -203,7 +150,6 @@ export class UpdateProductDto {
   })
   sku?: string;
 
-  @ApiPropertyOptional({ minimum: 0, maximum: MAX_PRICE })
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
@@ -211,7 +157,6 @@ export class UpdateProductDto {
   @Max(MAX_PRICE)
   price?: number;
 
-  @ApiPropertyOptional({ example: 'USD' })
   @IsOptional()
   @IsString()
   @Transform(({ value }) =>
@@ -220,12 +165,10 @@ export class UpdateProductDto {
   @Matches(/^[A-Z]{3}$/, { message: 'currency must be a 3-letter ISO code' })
   currency?: string;
 
-  @ApiPropertyOptional({ enum: ProductStatus, enumName: 'ProductStatus' })
   @IsOptional()
   @IsEnum(ProductStatus)
   status?: ProductStatus;
 
-  @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
   @IsUUID('4')
   categoryId?: string;

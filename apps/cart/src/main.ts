@@ -2,7 +2,6 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app/app.module';
 import type { CartEnv } from './config/env.validation';
 
@@ -48,20 +47,6 @@ async function bootstrap() {
     },
   });
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Cart Service (internal)')
-    .setDescription(
-      'Cart lifecycle. Internal service — public traffic goes through the API Gateway.',
-    )
-    .setVersion('1.0')
-    .build();
-
-  SwaggerModule.setup(
-    'docs',
-    app,
-    SwaggerModule.createDocument(app, swaggerConfig),
-  );
-
   // HTTP FIRST. The order of these two calls matters more than it looks.
   //
   // `startAllMicroservices()` waits for the broker connection, and
@@ -74,10 +59,7 @@ async function bootstrap() {
   const port = config.get('CART_SERVICE_PORT', { infer: true });
   await app.listen(port, '127.0.0.1');
 
-  Logger.log(
-    `cart service listening on http://127.0.0.1:${port} (docs: /docs)`,
-    'Bootstrap',
-  );
+  Logger.log(`cart service listening on http://127.0.0.1:${port}`, 'Bootstrap');
 
   // Then the message listener, deliberately NOT awaited.
   //

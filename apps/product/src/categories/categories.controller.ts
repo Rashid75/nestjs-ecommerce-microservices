@@ -17,10 +17,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CategoriesService } from './categories.service';
 
-@ApiTags('categories')
 @Controller('categories')
 export class CategoriesController {
   constructor(private readonly categories: CategoriesService) {}
@@ -34,14 +32,6 @@ export class CategoriesController {
    * treatment products got.
    */
   @Get()
-  @ApiOperation({ summary: 'List categories' })
-  @ApiQuery({
-    name: 'includeInactive',
-    required: false,
-    type: Boolean,
-    description: 'Admin views pass true. Storefronts should not.',
-  })
-  @ApiResponse({ status: 200, type: [CategoryDto] })
   findAll(
     @Query('includeInactive', new ParseBoolPipe({ optional: true }))
     includeInactive?: boolean,
@@ -50,9 +40,6 @@ export class CategoriesController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get one category' })
-  @ApiResponse({ status: 200, type: CategoryDto })
-  @ApiResponse({ status: 404, description: 'Category not found' })
   findOne(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<CategoryDto> {
@@ -60,19 +47,11 @@ export class CategoriesController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Create a category' })
-  @ApiResponse({ status: 201, type: CategoryDto })
-  @ApiResponse({ status: 400, description: 'Validation failed' })
-  @ApiResponse({ status: 409, description: 'name or slug already in use' })
   create(@Body() dto: CreateCategoryDto): Promise<CategoryDto> {
     return this.categories.create(dto);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Partially update a category' })
-  @ApiResponse({ status: 200, type: CategoryDto })
-  @ApiResponse({ status: 404, description: 'Category not found' })
-  @ApiResponse({ status: 409, description: 'name or slug already in use' })
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateCategoryDto,
@@ -82,14 +61,6 @@ export class CategoriesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({
-    summary: 'Soft-delete a category',
-    description:
-      'Refused with 409 while any product still references it. ON DELETE RESTRICT does not cover a soft delete, so the check is explicit.',
-  })
-  @ApiResponse({ status: 204, description: 'Deleted' })
-  @ApiResponse({ status: 404, description: 'Category not found' })
-  @ApiResponse({ status: 409, description: 'Category still has products' })
   remove(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<void> {

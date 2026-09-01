@@ -20,7 +20,6 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CatalogProxyService } from './catalog-proxy.service';
 
 /**
@@ -44,20 +43,11 @@ import { CatalogProxyService } from './catalog-proxy.service';
  * Role-based access control and the RS256 switch are scheduled together.
  * Until then this service must not be exposed beyond localhost.
  */
-@ApiTags('products')
 @Controller('products')
 export class ProductsController {
   constructor(private readonly catalog: CatalogProxyService) {}
 
   @Get()
-  @ApiOperation({
-    summary: 'List products with pagination, filtering and sorting',
-    description:
-      'Example: `/api/products?search=thinkpad&status=ACTIVE&minPrice=500&sortBy=price&sortOrder=asc&page=1&limit=20`',
-  })
-  @ApiResponse({ status: 200, type: PaginatedProductsDto })
-  @ApiResponse({ status: 400, description: 'Invalid query parameter' })
-  @ApiResponse({ status: 503, description: 'Product service unavailable' })
   async findAll(
     @Query() query: QueryProductsDto,
     @Res({ passthrough: true }) res: Response,
@@ -68,9 +58,6 @@ export class ProductsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get one product, with its category' })
-  @ApiResponse({ status: 200, type: ProductDto })
-  @ApiResponse({ status: 404, description: 'Product not found' })
   async findOne(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Res({ passthrough: true }) res: Response,
@@ -81,17 +68,11 @@ export class ProductsController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Create a product' })
-  @ApiResponse({ status: 201, type: ProductDto })
-  @ApiResponse({ status: 409, description: 'SKU already in use' })
   create(@Body() dto: CreateProductDto): Promise<ProductDto> {
     return this.catalog.createProduct(dto);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Partially update a product' })
-  @ApiResponse({ status: 200, type: ProductDto })
-  @ApiResponse({ status: 404, description: 'Product not found' })
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateProductDto,
@@ -101,9 +82,6 @@ export class ProductsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Soft-delete a product' })
-  @ApiResponse({ status: 204, description: 'Deleted' })
-  @ApiResponse({ status: 404, description: 'Product not found' })
   remove(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<void> {

@@ -1,4 +1,3 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 
@@ -28,11 +27,6 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
  * where we would introduce it, not before.
  */
 export class PaginationQueryDto {
-  @ApiPropertyOptional({
-    minimum: 1,
-    default: 1,
-    description: '1-based page number.',
-  })
   @IsOptional()
   // Query string values are always strings. Without this, `@IsInt()` sees
   // "2" and rejects it. `enableImplicitConversion` would do this globally,
@@ -42,12 +36,6 @@ export class PaginationQueryDto {
   @Min(1)
   page = 1;
 
-  @ApiPropertyOptional({
-    minimum: 1,
-    maximum: 100,
-    default: 20,
-    description: 'Items per page. Capped at 100.',
-  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -68,13 +56,21 @@ export class PaginationQueryDto {
  * a breaking change for every consumer.
  */
 export class PageMetaDto {
-  @ApiProperty({ example: 1 }) page!: number;
-  @ApiProperty({ example: 20 }) limit!: number;
-  @ApiProperty({ example: 137, description: 'Total rows matching the filter.' })
+  /** 1-based page number that was served. */
+  page!: number;
+
+  /** Items per page that was applied. */
+  limit!: number;
+
+  /** Total rows matching the filter, ignoring pagination. */
   total!: number;
-  @ApiProperty({ example: 7 }) totalPages!: number;
-  @ApiProperty({ example: true }) hasNext!: boolean;
-  @ApiProperty({ example: false }) hasPrevious!: boolean;
+
+  /** `ceil(total / limit)`, or 0 when there are no results at all. */
+  totalPages!: number;
+
+  hasNext!: boolean;
+
+  hasPrevious!: boolean;
 }
 
 export function buildPageMeta(

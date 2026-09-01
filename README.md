@@ -44,7 +44,7 @@ item back.
      │  GET  /api/auth/me         ·   GET  /api/categories
      ▼
 ┌──────────────────────┐
-│  API Gateway :3000   │  public · /api · DTO validation · Swagger · routing
+│  API Gateway :3000   │  public · /api · DTO validation · routing
 └──────────┬───────────┘
            │ HTTP (axios, 5s timeout, honest failure mapping)
      ┌─────┴───────────────┐
@@ -122,7 +122,6 @@ another service's tables directly; they talk over REST or RabbitMQ.
 | Authentication       | Passport + `passport-jwt` + guard                | M2                         |
 | Request validation   | class-validator / class-transformer              | M2                         |
 | Service-to-service   | HTTP via `@nestjs/axios`                         | M2                         |
-| API docs             | Swagger / OpenAPI                                | M2                         |
 | Money                | `DECIMAL(12,2)`, exposed as an exact string      | M3                         |
 | Cache                | Redis                                            | M4                         |
 | Messaging            | RabbitMQ                                         | M7                         |
@@ -146,7 +145,7 @@ ecommerce/
 │   │       ├── common/upstream-proxy.ts   shared failure mapping
 │   │       ├── common/rate-limit.guard.ts global, Redis-backed
 │   │       ├── config/env.validation.ts
-│   │       └── main.ts               ValidationPipe + Swagger
+│   │       └── main.ts               ValidationPipe + bootstrap
 │   │
 │   ├── auth/                         INTERNAL · 3001 · inspector 9230
 │   │   ├── .sequelizerc
@@ -459,13 +458,14 @@ event means an order.
 
 ## API
 
-Swagger UI:
+There is no generated API documentation in this project — no Swagger, no
+OpenAPI. The [Postman collection](postman) is the executable reference: every
+endpoint, with worked examples and assertions that run.
 
-|                    |                              |
-| ------------------ | ---------------------------- |
-| Gateway (public)   | <http://localhost:3000/docs> |
-| Auth (internal)    | <http://127.0.0.1:3001/docs> |
-| Product (internal) | <http://127.0.0.1:3002/docs> |
+That is a deliberate choice for a learning project. Decorator-driven docs add
+three or four lines of annotation to every route and DTO, which is noise while
+you are trying to read what the code actually _does_. A collection you can run
+is a better teacher than a page you can only look at.
 
 ### Auth
 

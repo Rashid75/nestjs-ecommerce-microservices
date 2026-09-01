@@ -1,4 +1,3 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
@@ -38,56 +37,30 @@ export const MAX_QUANTITY_PER_OPERATION = 100_000;
  * repair.
  */
 export class InventoryDto {
-  @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({
-    format: 'uuid',
-    description:
-      'The product this stock belongs to. Owned by the Product Service — there is no foreign key, because it lives in a different database.',
-  })
   productId!: string;
 
-  @ApiProperty({ example: 'LAP-X1C-14-2026' })
   sku!: string;
 
-  @ApiProperty({ example: 25, description: 'Physically in the warehouse.' })
   onHand!: number;
 
-  @ApiProperty({ example: 3, description: 'Promised to pending orders.' })
   reserved!: number;
 
-  @ApiProperty({
-    example: 22,
-    description: 'onHand − reserved. Derived, never stored.',
-  })
   available!: number;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   updatedAt!: Date;
 }
 
 /** Registers a product with the inventory system. */
 export class CreateInventoryDto {
-  @ApiProperty({ format: 'uuid' })
   @IsUUID('4')
   productId!: string;
 
-  @ApiProperty({
-    example: 'LAP-X1C-14-2026',
-    maxLength: 64,
-    description:
-      'Copied from the Product Service for human-readable operations. Denormalised on purpose — see the note on the model.',
-  })
   @IsString()
   @MaxLength(64)
   sku!: string;
 
-  @ApiPropertyOptional({
-    example: 0,
-    default: 0,
-    description: 'Opening stock. Defaults to zero — nothing arrives by magic.',
-  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -104,12 +77,6 @@ export class CreateInventoryDto {
  * ledger useful and what idempotency will hang off in Milestone 8.
  */
 export class StockOperationDto {
-  @ApiProperty({
-    example: 5,
-    minimum: 1,
-    maximum: MAX_QUANTITY_PER_OPERATION,
-    description: 'Always POSITIVE. The operation decides the direction.',
-  })
   @Type(() => Number)
   // Strictly positive. Allowing 0 would let a caller write meaningless ledger
   // rows; allowing negatives would let `reserve` secretly become `release`
@@ -119,12 +86,6 @@ export class StockOperationDto {
   @Max(MAX_QUANTITY_PER_OPERATION)
   quantity!: number;
 
-  @ApiPropertyOptional({
-    example: 'order:9f3c...',
-    maxLength: 200,
-    description:
-      'What caused this movement — an order id, a purchase order, a support ticket. Recorded in the ledger.',
-  })
   @IsOptional()
   @IsString()
   @MaxLength(200)
@@ -139,21 +100,12 @@ export class StockOperationDto {
  * bug, so the API refuses to accept one.
  */
 export class AdjustStockDto {
-  @ApiProperty({
-    example: -2,
-    description: 'Signed delta applied to onHand. May be negative.',
-  })
   @Type(() => Number)
   @IsInt()
   @Min(-MAX_QUANTITY_PER_OPERATION)
   @Max(MAX_QUANTITY_PER_OPERATION)
   delta!: number;
 
-  @ApiProperty({
-    example: 'annual stock count',
-    maxLength: 200,
-    description: 'Required. An adjustment with no reason is not auditable.',
-  })
   @IsString()
   @MaxLength(200)
   reason!: string;
@@ -174,27 +126,17 @@ export enum StockMovementType {
 }
 
 export class StockMovementDto {
-  @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ enum: StockMovementType, enumName: 'StockMovementType' })
   type!: StockMovementType;
 
-  @ApiProperty({
-    example: 5,
-    description: 'Signed. Negative for movements that reduce the figure.',
-  })
   quantity!: number;
 
-  @ApiProperty({ type: String, nullable: true })
   reference!: string | null;
 
-  @ApiProperty({ example: 25, description: 'onHand AFTER this movement.' })
   onHandAfter!: number;
 
-  @ApiProperty({ example: 3, description: 'reserved AFTER this movement.' })
   reservedAfter!: number;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   createdAt!: Date;
 }

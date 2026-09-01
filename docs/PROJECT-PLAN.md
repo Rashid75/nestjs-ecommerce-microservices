@@ -46,7 +46,7 @@ This is a **learning project**. The rules it runs under:
    Client
      ▼
 ┌──────────────────────┐
-│  API Gateway :3000   │  public · /api · DTO validation · Swagger
+│  API Gateway :3000   │  public · /api · DTO validation · routing
 └──────────┬───────────┘
            │ HTTP (axios, 5s timeout, honest failure mapping)
      ┌─────┴──────┐
@@ -118,14 +118,12 @@ Infrastructure: PostgreSQL · Redis · RabbitMQ · MailHog · OpenTelemetry · S
 - Timing-equalised login via a dummy hash; identical responses for unknown
   email, wrong password and disabled account
 - Passport JWT strategy, `JwtAuthGuard`, `@CurrentUser()` decorator
-- Swagger at `/docs`
 
 **API Gateway** (`:3000`, public)
 
 - Forwards `/api/auth/*` over HTTP with a 5s timeout
 - Honest failure mapping: pass-through status · 503 · 504 · 502
 - Global `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`, `transform`)
-- Swagger at `/docs`
 
 **`libs/contracts`** — auth DTOs shared by both apps. No models shared.
 
@@ -168,7 +166,6 @@ through the gateway. 7 unit tests.
 - Pagination, search, category filter, status filter, price range, sorting
 - `ORDER BY` restricted by an enum allow-list — the one thing SQL cannot
   parameterise
-- Swagger at `/docs`
 
 **API Gateway** — `/api/products` and `/api/categories`, a second `HttpModule`
 with its own baseURL, and the forwarding logic extracted to a shared
@@ -483,6 +480,18 @@ disappears.
 
 GitHub Actions: install → lint → unit → integration → build → docker build.
 No production deployment without explicit instruction.
+
+---
+
+## Removed on purpose
+
+| Removed                                           | When       | Why                                                                                                                                                                                                                                                        |
+| ------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Swagger / OpenAPI** (`@nestjs/swagger`)         | 2026-09-01 | ~290 decorators across 24 files, adding three or four annotation lines to every route and DTO. The noise was getting in the way of reading the code, which is the point of a learning project. The Postman collection is the executable reference instead. |
+| **Custom messaging framework** (`libs/messaging`) | 2026-09-01 | Replaced with NestJS's built-in `@nestjs/microservices` + `Transport.RMQ`. Keep it simple until a lesson needs more.                                                                                                                                       |
+
+Both can come back when there is a reason. Swagger earns its place when
+external consumers need a contract they can generate a client from.
 
 ---
 

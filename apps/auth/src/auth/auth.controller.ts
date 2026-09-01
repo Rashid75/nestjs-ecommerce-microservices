@@ -14,12 +14,6 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
 import type { UserRecord } from '../users/users.repository';
 import { AuthService, toProfile } from './auth.service';
 import { CurrentUser } from './current-user.decorator';
@@ -39,16 +33,11 @@ import { JwtAuthGuard } from './jwt-auth.guard';
  * internet, which is why there is no rate limiting here yet — that belongs at
  * the gateway, where the public traffic actually arrives.
  */
-@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('register')
-  @ApiOperation({ summary: 'Create an account and receive an access token' })
-  @ApiResponse({ status: 201, type: AuthResponseDto })
-  @ApiResponse({ status: 400, description: 'Validation failed' })
-  @ApiResponse({ status: 409, description: 'Email already registered' })
   register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
     return this.auth.register(dto);
   }
@@ -57,9 +46,6 @@ export class AuthController {
   // Without this, NestJS would return 201 for any POST. A login CREATES
   // nothing — it verifies a credential — so 200 is the honest status.
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Exchange email and password for an access token' })
-  @ApiResponse({ status: 200, type: AuthResponseDto })
-  @ApiResponse({ status: 401, description: 'Invalid email or password' })
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.auth.login(dto);
   }
@@ -70,15 +56,6 @@ export class AuthController {
    */
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  // Tells Swagger this route needs the bearer token, which makes the
-  // "Authorize" button in the UI apply to it.
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Return the authenticated user' })
-  @ApiResponse({ status: 200, type: UserProfileDto })
-  @ApiResponse({
-    status: 401,
-    description: 'Missing, expired or invalid token',
-  })
   getProfile(@CurrentUser() user: UserRecord | undefined): UserProfileDto {
     if (user === undefined) {
       // Unreachable while the guard is in place. It exists because the guard

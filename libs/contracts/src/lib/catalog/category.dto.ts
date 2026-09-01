@@ -1,4 +1,3 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
@@ -25,45 +24,28 @@ import {
  * available rather than pre-build.
  */
 export class CategoryDto {
-  @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ example: 'Laptops' })
   name!: string;
 
-  @ApiProperty({
-    example: 'laptops',
-    description: 'URL-safe identifier, unique across live categories.',
-  })
   slug!: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Portable computers' })
   description!: string | null;
 
-  @ApiProperty({ example: true })
   isActive!: boolean;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   createdAt!: Date;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   updatedAt!: Date;
 }
 
 export class CreateCategoryDto {
-  @ApiProperty({ example: 'Laptops', maxLength: 120 })
   @IsString()
   @MinLength(2)
   @MaxLength(120)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   name!: string;
 
-  @ApiProperty({
-    example: 'laptops',
-    maxLength: 140,
-    description:
-      'Lowercase letters, digits and hyphens only. Appears in public URLs.',
-  })
   @IsString()
   @MinLength(2)
   @MaxLength(140)
@@ -79,7 +61,6 @@ export class CreateCategoryDto {
   })
   slug!: string;
 
-  @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()
   @IsString()
   @MaxLength(1000)
@@ -100,7 +81,6 @@ export class CreateCategoryDto {
  * mapped type you have to compile in your head.
  */
 export class UpdateCategoryDto {
-  @ApiPropertyOptional({ example: 'Laptops', maxLength: 120 })
   @IsOptional()
   @IsString()
   @MinLength(2)
@@ -108,7 +88,6 @@ export class UpdateCategoryDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   name?: string;
 
-  @ApiPropertyOptional({ example: 'laptops', maxLength: 140 })
   @IsOptional()
   @IsString()
   @MinLength(2)
@@ -122,16 +101,11 @@ export class UpdateCategoryDto {
   })
   slug?: string;
 
-  @ApiPropertyOptional({ maxLength: 1000 })
   @IsOptional()
   @IsString()
   @MaxLength(1000)
   description?: string;
 
-  @ApiPropertyOptional({
-    description:
-      'Set false to hide the category. Products in it are unaffected.',
-  })
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;

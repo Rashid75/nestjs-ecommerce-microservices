@@ -1,4 +1,3 @@
-import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsEmail,
@@ -22,28 +21,16 @@ import {
  * monolith.
  */
 export class RegisterDto {
-  @ApiProperty({
-    example: 'ada@example.com',
-    maxLength: 320,
-    description: 'Login identity. Stored and compared in lowercase.',
-  })
   @IsEmail({}, { message: 'email must be a valid email address' })
   @MaxLength(320)
   // Normalise BEFORE validation runs so `Ada@Example.com` and `ada@example.com`
   // cannot become two accounts. Doing this in the DTO rather than in the
-  // service means every entry point gets it, including Swagger's "try it out".
+  // service means every entry point gets it, whatever the caller.
   @Transform(({ value }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   email!: string;
 
-  @ApiProperty({
-    example: 'correct-horse-Battery9',
-    minLength: 12,
-    maxLength: 72,
-    description:
-      'Minimum 12 characters, with at least one lowercase letter, one uppercase letter and one digit.',
-  })
   @IsString()
   @MinLength(12)
   // 72 is not an arbitrary limit — it is bcrypt's. bcrypt hashes at most 72
@@ -57,14 +44,12 @@ export class RegisterDto {
   })
   password!: string;
 
-  @ApiProperty({ example: 'Ada', maxLength: 100 })
   @IsString()
   @MinLength(1)
   @MaxLength(100)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   firstName!: string;
 
-  @ApiProperty({ example: 'Lovelace', maxLength: 100 })
   @IsString()
   @MinLength(1)
   @MaxLength(100)

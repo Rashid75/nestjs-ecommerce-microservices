@@ -1,4 +1,3 @@
-import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from './user-role.enum';
 
 /**
@@ -15,22 +14,16 @@ import { UserRole } from './user-role.enum';
  * at once is unlikely, which is the whole idea behind defence in depth.
  */
 export class UserProfileDto {
-  @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ example: 'ada@example.com' })
   email!: string;
 
-  @ApiProperty({ example: 'Ada' })
   firstName!: string;
 
-  @ApiProperty({ example: 'Lovelace' })
   lastName!: string;
 
-  @ApiProperty({ enum: UserRole, enumName: 'UserRole' })
   role!: UserRole;
 
-  @ApiProperty({ type: String, format: 'date-time' })
   createdAt!: Date;
 }
 
@@ -46,27 +39,17 @@ export class UserProfileDto {
  * which is a whole subject of its own.
  */
 export class AuthTokensDto {
-  @ApiProperty({
-    description: 'Signed JWT. Send as: Authorization: Bearer <token>',
-  })
   accessToken!: string;
 
-  @ApiProperty({ example: 'Bearer' })
   tokenType!: string;
 
-  @ApiProperty({
-    example: 900,
-    description: 'Access token lifetime in seconds.',
-  })
   expiresIn!: number;
 }
 
 /** What both `POST /auth/register` and `POST /auth/login` return. */
 export class AuthResponseDto {
-  @ApiProperty({ type: UserProfileDto })
   user!: UserProfileDto;
 
-  @ApiProperty({ type: AuthTokensDto })
   tokens!: AuthTokensDto;
 }
 

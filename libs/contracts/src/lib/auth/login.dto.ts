@@ -1,4 +1,3 @@
-import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
 
@@ -15,7 +14,6 @@ import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
  * whether the supplied credential matches the stored hash.
  */
 export class LoginDto {
-  @ApiProperty({ example: 'ada@example.com', maxLength: 320 })
   @IsEmail({}, { message: 'email must be a valid email address' })
   @MaxLength(320)
   @Transform(({ value }) =>
@@ -23,7 +21,6 @@ export class LoginDto {
   )
   email!: string;
 
-  @ApiProperty({ example: 'correct-horse-Battery9', maxLength: 72 })
   @IsString()
   @MinLength(1)
   // Still capped, because an unbounded string is an unbounded amount of work

@@ -1,7 +1,6 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app/app.module';
 import type { AuthEnv } from './config/env.validation';
 
@@ -41,26 +40,6 @@ async function bootstrap() {
     }),
   );
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Auth Service (internal)')
-    .setDescription(
-      'Internal service. Public traffic goes through the API Gateway.',
-    )
-    .setVersion('1.0')
-    // Registers the security scheme so the "Authorize" button appears and
-    // @ApiBearerAuth() routes can use it.
-    .addBearerAuth(
-      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-      'bearer',
-    )
-    .build();
-
-  SwaggerModule.setup(
-    'docs',
-    app,
-    SwaggerModule.createDocument(app, swaggerConfig),
-  );
-
   const port = config.get('AUTH_SERVICE_PORT', { infer: true });
 
   // Bound to the LOOPBACK interface, not 0.0.0.0.
@@ -72,10 +51,7 @@ async function bootstrap() {
   // port.
   await app.listen(port, '127.0.0.1');
 
-  Logger.log(
-    `auth service listening on http://127.0.0.1:${port} (docs: /docs)`,
-    'Bootstrap',
-  );
+  Logger.log(`auth service listening on http://127.0.0.1:${port}`, 'Bootstrap');
 }
 
 void bootstrap();
