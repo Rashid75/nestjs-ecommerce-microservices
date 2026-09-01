@@ -38,6 +38,8 @@ export interface AuthEnv {
   JWT_ACCESS_SECRET: string;
   JWT_ACCESS_TTL_SECONDS: number;
   BCRYPT_COST: number;
+  RABBITMQ_URL: string;
+  RABBITMQ_QUEUE: string;
 }
 
 export const authEnvSchema = Joi.object({
@@ -77,4 +79,13 @@ export const authEnvSchema = Joi.object({
   // Upper bound 15: bcrypt cost is exponential, and a slow enough hash turns
   // your own login endpoint into a denial-of-service vector against yourself.
   BCRYPT_COST: Joi.number().integer().min(10).max(15).default(12),
+  // NestJS's RMQ transport manages the connection, reconnects and channels.
+  // A broker that is down does not stop a service booting; publishes fail
+  // and are logged.
+  RABBITMQ_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .required(),
+
+  // The queue publishers send to and the Cart Service consumes from.
+  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
 });

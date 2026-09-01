@@ -14,6 +14,7 @@ import { DatabaseModule } from '../database/database.module';
       cache: true,
     }),
     DatabaseModule,
+
     CartModule,
   ],
 })

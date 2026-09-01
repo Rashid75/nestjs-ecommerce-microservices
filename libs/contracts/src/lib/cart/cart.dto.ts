@@ -71,6 +71,29 @@ export class CartItemDto {
 
   @ApiProperty({ type: String, format: 'date-time' })
   addedAt!: Date;
+
+  /**
+   * Set when a `product.price_changed` event arrived after this line was
+   * added. The snapshot above is UNCHANGED — this only says it is stale.
+   *
+   * A UI shows both: "was 19.99, now 24.99". Checkout uses it to force a
+   * re-confirmation rather than silently charging either figure.
+   */
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    example: '24.99',
+    description:
+      'The catalogue price now, if it has changed since this line was added. Null means the snapshot is still current.',
+  })
+  cataloguePrice?: string | null;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'True when the product has been archived. The line stays in the cart — removing it silently is more alarming than showing it with a reason.',
+  })
+  unavailable?: boolean;
 }
 
 export class CartDto {

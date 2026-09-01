@@ -5,6 +5,8 @@ import {
   LoginDto,
   RegisterDto,
   UserProfileDto,
+  EventPattern,
+  EVENTS_CLIENT,
 } from '@ecommerce/contracts';
 import {
   ConflictException,
@@ -13,7 +15,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ClientProxy } from '@nestjs/microservices';
 import { JwtService } from '@nestjs/jwt';
+import { Inject } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import type { AuthEnv } from '../config/env.validation';
 import {
@@ -49,6 +53,7 @@ export class AuthService {
   constructor(
     private readonly users: UsersRepository,
     private readonly jwt: JwtService,
+    @Inject(EVENTS_CLIENT) private readonly events: ClientProxy,
     config: ConfigService<AuthEnv, true>,
   ) {
     this.bcryptCost = config.get('BCRYPT_COST', { infer: true });
@@ -89,6 +94,29 @@ export class AuthService {
       // Log the id, never the email — an application log is not an access-
       // controlled store of personal data.
       this.logger.log(`registered user ${user.id}`);
+
+      // `emit`, not `send`.
+      //
+      //   emit()  fire and forget — publish an EVENT and move on. Returns an
+      //           Observable that completes once the message is handed to
+      //           the broker; nobody replies.
+      //   send()  request/response — publish a COMMAND and wait for a reply.
+      //           That is `@MessagePattern` on the other end.
+      //
+      // "A user registered" is a fact, so nothing replies to it.
+      //
+      // Not awaited: registration must not fail because a broker is down.
+      // The cost is that a lost event is genuinely lost — acceptable for a
+      // welcome email, and something we will have to solve properly when an
+      // event means an order.
+      //
+      // Note WHAT is published: `user.registered`, a past-tense fact, not
+      // `send.welcome.email`. Auth does not know an email system exists.
+      this.events.emit(EventPattern.UserRegistered, {
+        userId: user.id,
+        email: user.email,
+        firstName: user.firstName,
+      });
 
       return { user: toProfile(user), tokens: await this.issueTokens(user) };
     } catch (error) {

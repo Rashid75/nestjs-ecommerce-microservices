@@ -28,6 +28,8 @@ export interface ProductEnv {
   CACHE_ENABLED: boolean;
   CACHE_PRODUCT_TTL_SECONDS: number;
   CACHE_LIST_TTL_SECONDS: number;
+  RABBITMQ_URL: string;
+  RABBITMQ_QUEUE: string;
 }
 
 export const productEnvSchema = Joi.object({
@@ -68,4 +70,13 @@ export const productEnvSchema = Joi.object({
   // of them changing makes it stale. Generation-based invalidation handles
   // the common case; this bounds the damage from anything it misses.
   CACHE_LIST_TTL_SECONDS: Joi.number().integer().min(1).max(3600).default(60),
+  // NestJS's RMQ transport manages the connection, reconnects and channels.
+  // A broker that is down does not stop a service booting; publishes fail
+  // and are logged.
+  RABBITMQ_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .required(),
+
+  // The queue publishers send to and the Cart Service consumes from.
+  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
 });

@@ -1,4 +1,5 @@
 import { UserRole } from '@ecommerce/contracts';
+import type { ClientProxy } from '@nestjs/microservices';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { JwtService } from '@nestjs/jwt';
@@ -70,10 +71,32 @@ function makeRepo(): RepoFake {
   };
 }
 
-function makeService(repo: RepoFake): AuthService {
+/**
+ * A ClientProxy that records what would have been emitted.
+ *
+ * `emit` returns an Observable in real life; the service does not subscribe
+ * to it (fire and forget), so returning a plain object is faithful enough
+ * for these tests. What matters is WHICH pattern was emitted and WHEN.
+ */
+function makePublisher(): { fake: ClientProxy; published: string[] } {
+  const published: string[] = [];
+  const fake = {
+    emit: (pattern: string) => {
+      published.push(pattern);
+      return { subscribe: () => undefined };
+    },
+  } as unknown as ClientProxy;
+  return { fake, published };
+}
+
+function makeService(
+  repo: RepoFake,
+  publisher: ClientProxy = makePublisher().fake,
+): AuthService {
   return new AuthService(
     repo as unknown as UsersRepository,
     makeJwt(),
+    publisher,
     makeConfig(),
   );
 }
@@ -118,6 +141,42 @@ describe('AuthService', () => {
       expect(result.user).not.toHaveProperty('passwordHash');
       expect(result.tokens.tokenType).toBe('Bearer');
       expect(result.tokens.expiresIn).toBe(TTL_SECONDS);
+    });
+
+    it('publishes user.registered as a past-tense FACT, not a command', async () => {
+      const repo = makeRepo();
+      repo.create.mockResolvedValue(makeUser());
+      const { fake, published } = makePublisher();
+
+      await makeService(repo, fake).register({
+        email: 'ada@example.com',
+        password: 'correct-horse-Battery9',
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      });
+
+      // NOT 'send.welcome.email'. Auth does not know an email system exists,
+      // so Notification can appear or disappear without Auth changing.
+      expect(published).toEqual(['user.registered']);
+    });
+
+    it('does not publish when registration failed', async () => {
+      const repo = makeRepo();
+      repo.create.mockRejectedValue(
+        new EmailAlreadyRegisteredError('ada@example.com'),
+      );
+      const { fake, published } = makePublisher();
+
+      await expect(
+        makeService(repo, fake).register({
+          email: 'ada@example.com',
+          password: 'correct-horse-Battery9',
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(published).toEqual([]);
     });
 
     it('translates a duplicate email into 409 Conflict', async () => {

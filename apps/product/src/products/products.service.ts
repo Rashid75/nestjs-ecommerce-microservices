@@ -1,5 +1,7 @@
 import {
   buildPageMeta,
+  EventPattern,
+  EVENTS_CLIENT,
   CreateProductDto,
   PaginatedProductsDto,
   ProductDto,
@@ -7,8 +9,10 @@ import {
   QueryProductsDto,
   UpdateProductDto,
 } from '@ecommerce/contracts';
+import { ClientProxy } from '@nestjs/microservices';
 import {
   BadRequestException,
+  Inject,
   ConflictException,
   Injectable,
   Logger,
@@ -49,6 +53,7 @@ export class ProductsService {
   constructor(
     private readonly products: ProductsRepository,
     private readonly cache: ProductsCacheService,
+    @Inject(EVENTS_CLIENT) private readonly events: ClientProxy,
   ) {}
 
   async create(dto: CreateProductDto): Promise<ProductDto> {
@@ -153,6 +158,12 @@ export class ProductsService {
       throw new BadRequestException('Provide at least one field to update');
     }
 
+    // Captured BEFORE the write, because the event carries the previous
+    // price and there is no way to recover it afterwards. An event that says
+    // "the price changed" without saying what it changed FROM forces every
+    // consumer to have kept its own copy — which defeats the point.
+    const before = await this.products.findById(id);
+
     try {
       const updated = await this.products.update(id, patch);
       if (updated === null) {
@@ -171,6 +182,8 @@ export class ProductsService {
       // cheap backstop until then — which is the real reason every cached
       // key has one.
       await this.cache.invalidateProduct(id);
+
+      this.publishChanges(before, updated);
 
       this.logger.log(`updated product ${id}`);
       return toDto(updated);
@@ -197,6 +210,54 @@ export class ProductsService {
     await this.cache.invalidateProduct(id);
 
     this.logger.log(`soft-deleted product ${id}`);
+  }
+
+  /**
+   * Emits an event per MEANINGFUL change, comparing before and after.
+   *
+   * Note what is NOT published: a generic `product.updated` carrying the
+   * whole row. That is the lazy option and it pushes work onto every
+   * consumer — each one must diff the payload against its own copy to work
+   * out whether it cares. Specific, past-tense events let a consumer bind to
+   * exactly what it needs and ignore the rest at the broker.
+   *
+   * Published only AFTER the database commit succeeded, for the same reason
+   * cache invalidation runs after the write: announcing something that then
+   * failed is worse than announcing it late.
+   *
+   * `emit` is fire-and-forget. Nobody replies to "the price changed".
+   */
+  private publishChanges(
+    before: ProductRecord | null,
+    after: ProductRecord,
+  ): void {
+    // Nullish, not `=== null`. The repository is typed to return null, but
+    // a TypeError here would happen inside a fire-and-forget publish path
+    // where nothing is watching — a class of bug that hides rather than
+    // fails loudly.
+    if (before == null) {
+      return;
+    }
+
+    if (before.price !== after.price) {
+      this.events.emit(EventPattern.ProductPriceChanged, {
+        productId: after.id,
+        sku: after.sku,
+        previousPrice: before.price,
+        newPrice: after.price,
+        currency: after.currency,
+      });
+    }
+
+    if (
+      before.status !== ProductStatus.Archived &&
+      after.status === ProductStatus.Archived
+    ) {
+      this.events.emit(EventPattern.ProductArchived, {
+        productId: after.id,
+        sku: after.sku,
+      });
+    }
   }
 
   private translate(error: unknown): unknown {

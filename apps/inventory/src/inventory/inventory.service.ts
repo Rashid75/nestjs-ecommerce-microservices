@@ -1,12 +1,16 @@
 import {
   AdjustStockDto,
+  EventPattern,
+  EVENTS_CLIENT,
   CreateInventoryDto,
   InventoryDto,
   StockMovementDto,
   StockOperationDto,
 } from '@ecommerce/contracts';
+import { ClientProxy } from '@nestjs/microservices';
 import {
   ConflictException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -26,7 +30,10 @@ const MOVEMENT_PAGE_SIZE = 50;
 export class InventoryService {
   private readonly logger = new Logger(InventoryService.name);
 
-  constructor(private readonly inventory: InventoryRepository) {}
+  constructor(
+    private readonly inventory: InventoryRepository,
+    @Inject(EVENTS_CLIENT) private readonly events: ClientProxy,
+  ) {}
 
   async create(dto: CreateInventoryDto): Promise<InventoryDto> {
     try {
@@ -81,16 +88,41 @@ export class InventoryService {
    * looked like "check availability, then reserve" would be reintroducing
    * the race the repository was written to close.
    */
-  reserve(productId: string, dto: StockOperationDto): Promise<InventoryDto> {
-    return this.run(() =>
+  async reserve(
+    productId: string,
+    dto: StockOperationDto,
+  ): Promise<InventoryDto> {
+    const result = await this.run(() =>
       this.inventory.reserve(productId, dto.quantity, dto.reference ?? null),
     );
+
+    // Published only on SUCCESS. `this.run` throws on a failed reservation,
+    // so a 409 never reaches this line — a "StockReserved" event for stock
+    // that was not reserved would be a lie that consumers act on.
+    this.events.emit(EventPattern.StockReserved, {
+      productId,
+      quantity: dto.quantity,
+      available: result.available,
+    });
+
+    return result;
   }
 
-  release(productId: string, dto: StockOperationDto): Promise<InventoryDto> {
-    return this.run(() =>
+  async release(
+    productId: string,
+    dto: StockOperationDto,
+  ): Promise<InventoryDto> {
+    const result = await this.run(() =>
       this.inventory.release(productId, dto.quantity, dto.reference ?? null),
     );
+
+    this.events.emit(EventPattern.StockReleased, {
+      productId,
+      quantity: dto.quantity,
+      available: result.available,
+    });
+
+    return result;
   }
 
   fulfil(productId: string, dto: StockOperationDto): Promise<InventoryDto> {

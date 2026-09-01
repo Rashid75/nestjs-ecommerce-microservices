@@ -30,6 +30,8 @@ export interface InventoryEnv {
   INVENTORY_DB_DATABASE: string;
   INVENTORY_DB_LOGGING: boolean;
   INVENTORY_DB_SSL: boolean;
+  RABBITMQ_URL: string;
+  RABBITMQ_QUEUE: string;
 }
 
 export const inventoryEnvSchema = Joi.object({
@@ -46,4 +48,13 @@ export const inventoryEnvSchema = Joi.object({
   INVENTORY_DB_DATABASE: Joi.string().required(),
   INVENTORY_DB_LOGGING: Joi.boolean().default(false),
   INVENTORY_DB_SSL: Joi.boolean().default(false),
+  // NestJS's RMQ transport manages the connection, reconnects and channels.
+  // A broker that is down does not stop a service booting; publishes fail
+  // and are logged.
+  RABBITMQ_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .required(),
+
+  // The queue publishers send to and the Cart Service consumes from.
+  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
 });

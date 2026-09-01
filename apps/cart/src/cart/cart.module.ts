@@ -2,6 +2,7 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SequelizeModule } from '@nestjs/sequelize';
+import { CatalogueEventsController } from '../catalog/catalogue-events.controller';
 import { ProductLookupService } from '../catalog/product-lookup.service';
 import type { CartEnv } from '../config/env.validation';
 import { CartItem } from './cart-item.model';
@@ -25,7 +26,9 @@ import { CartService } from './cart.service';
       }),
     }),
   ],
-  controllers: [CartController],
+  // TWO controllers: one for HTTP, one for messages. Nest treats them the
+  // same way — the only difference is which decorator the handlers carry.
+  controllers: [CartController, CatalogueEventsController],
   providers: [CartService, CartRepository, ProductLookupService],
 })
 export class CartModule {}

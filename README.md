@@ -4,10 +4,10 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 6 — Cart Service.**
-> Five services, four PostgreSQL databases, an authenticated cart, a
-> catalogue API with Redis caching, Redis-backed rate limiting, and
-> concurrency-safe stock. No orders or RabbitMQ yet.
+> **Current status: Milestone 7 — RabbitMQ Messaging.**
+> Five services talking both synchronously (HTTP) and asynchronously
+> (RabbitMQ topic exchange, with retries, dead-lettering and idempotent
+> consumers). No orders or payments yet.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -24,6 +24,7 @@ item back.
 - [Local setup](#local-setup)
 - [Database and migrations](#database-and-migrations)
 - [Caching and rate limiting](#caching-and-rate-limiting)
+- [Messaging](#messaging)
 - [API](#api)
 - [Postman](#postman)
 - [Everyday commands](#everyday-commands)
@@ -190,7 +191,8 @@ ecommerce/
 ├── postman/                          collection + local environment
 ├── tools/
 │   ├── free-ports.mjs                kills orphaned dev servers
-│   └── oversell-demo.mjs             concurrent reservation proof
+│   ├── oversell-demo.mjs             concurrent reservation proof
+│   └── messaging-demo.mjs            publish, duplicate, dead-letter
 ├── .env.example                      committed template, no real secrets
 ├── .env                              local values, git-ignored
 ├── eslint.config.mjs                 module boundary rules
@@ -208,11 +210,19 @@ locally.
 npm install
 ```
 
-Start Redis — the simplest route is a container:
+Start Redis and RabbitMQ — the simplest route is containers:
 
 ```bash
 docker run -d --name ecommerce-redis -p 6379:6379 redis:7-alpine
 ```
+
+```bash
+docker run -d --name ecommerce-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+```
+
+The RabbitMQ management UI is at <http://localhost:15672> (guest / guest) —
+the best way to see exchanges, bindings, queue depths and the dead-letter
+queue.
 
 ```bash
 cp .env.example .env
@@ -371,6 +381,81 @@ behind one NAT shares a counter, and a botnet gets 5 attempts per IP; per-
 account lockout and MFA are the next layers.
 
 ---
+
+## Messaging
+
+Synchronous HTTP where the caller needs an answer now; RabbitMQ where it does
+not. Built with **NestJS's built-in integration** — `@nestjs/microservices`
+with `Transport.RMQ` — rather than a hand-rolled client.
+
+```text
+   Auth ─────user.registered──────┐
+Product ─────product.price_changed┤
+        ─────product.archived─────┤──► queue: ecommerce_events ──► Cart Service
+Inventory ───inventory.reserved───┤                                @EventPattern
+          ───inventory.released───┘
+```
+
+### Publishing
+
+`ClientsModule.registerAsync()` in the feature module whose service
+publishes — it is **not** global, so the provider has to live where it is
+injected:
+
+```ts
+this.events.emit(EventPattern.UserRegistered, { userId, email, firstName });
+```
+
+`emit()`, not `send()`:
+
+|          | Used for                        | Other end           |
+| -------- | ------------------------------- | ------------------- |
+| `emit()` | **Events** — fire and forget    | `@EventPattern()`   |
+| `send()` | **Commands** — request/response | `@MessagePattern()` |
+
+Nobody replies to "a user registered", so `emit` is correct.
+
+### Consuming
+
+The Cart Service is a **hybrid application**: HTTP and RabbitMQ in one
+process. Message handlers live in a controller, because in Nest a controller
+is simply "the thing requests arrive at" — only the decorator differs:
+
+```ts
+@EventPattern(Events.ProductPriceChanged)
+async onPriceChanged(@Payload() payload: ProductPriceChangedPayload) { ... }
+```
+
+`main.ts` calls `app.listen()` **before** `app.startAllMicroservices()`.
+That order matters: `startAllMicroservices()` waits for the broker and
+retries indefinitely, so awaiting it first means a down RabbitMQ takes the
+whole HTTP API down with it.
+
+### Events are facts, not instructions
+
+`user.registered`, never `send.welcome.email`. A command says "do this" and
+is addressed to one handler; an event says "this happened" and is addressed
+to nobody in particular. The second name would couple Auth to the existence
+of an email system.
+
+### One queue, and its limitation
+
+Nest's RMQ transport is **queue-centric**: publishers send to a named queue
+and a consuming service reads from it. Simple — and it means a second
+consuming service would **compete** for the same messages rather than each
+receiving a copy. Exchanges and bindings are the answer to that, and they
+arrive when there is a second consumer that needs them.
+
+### What is deliberately not built yet
+
+Retry, dead-letter queues, idempotency, a transactional outbox and an event
+envelope are all absent. Each solves a real problem, and each arrives in the
+milestone that meets that problem — see
+[the deferred table](docs/PROJECT-PLAN.md).
+
+Today a failed handler loses its message and a duplicate delivery flags a
+cart line twice. Both are harmless for these events; neither would be once an
+event means an order.
 
 ## API
 
@@ -591,6 +676,14 @@ that can verify can also mint; handing a public-facing process that ability
 to read one claim is a bad trade. RS256 is the clean fix and is still
 pending.
 
+**Events are facts, not instructions.** A publisher that emits
+`send.welcome.email` has decided who should react. `user.registered` lets
+consumers appear and disappear without it ever changing.
+
+**Use the framework's answer before building your own.** RabbitMQ goes
+through `@nestjs/microservices` — no custom connection manager, publisher
+or consumer. Complexity is added when a lesson demands it, not upfront.
+
 **Stock is never cached.** The Inventory Service has no `REDIS_URL`. A
 cached `available: 1` is not a slightly stale product name — it is a promise
 the warehouse cannot keep, and the staleness window is exactly the window in
@@ -628,18 +721,24 @@ Stated plainly, tracked with triggers in
 2. **Internal services trust `X-User-Id`.** The Cart Service does not verify
    tokens; it believes a header, safe only because it binds to loopback.
    Needs a shared secret, mTLS, or RS256 internal tokens.
-3. **Rate limiting is per-IP only** and fails open when Redis is down. It
+3. **Messaging has no retry, dead-letter queue or idempotency.** A failed
+   handler loses its message; a duplicate delivery flags a line twice. Both
+   are harmless for today's events and neither would be once an event means
+   an order.
+4. **The dual-write problem is unsolved.** A publish can fail after its
+   database commit, losing the event with only a log line.
+5. **Rate limiting is per-IP only** and fails open when Redis is down. It
    raises the cost of credential stuffing; it does not stop a distributed
    attack. Per-account lockout and MFA are still absent.
-4. **No RBAC**, though `role` is already a claim and a column.
-5. **No audit logging** of authentication or catalogue mutations.
-6. **No correlation IDs** — a request cannot yet be traced across services.
-7. **Reservations never expire.** An abandoned cart holds stock indefinitely.
+6. **No RBAC**, though `role` is already a claim and a column.
+7. **No audit logging** of authentication or catalogue mutations.
+8. **No correlation IDs** — a request cannot yet be traced across services.
+9. **Reservations never expire.** An abandoned cart holds stock indefinitely.
    Needs per-order reservation records with a TTL (M6/M8).
-8. **Stock operations are not idempotent.** Retrying a reserve after a
-   timeout double-reserves (M8).
-9. **`.env` holds development secrets** that have appeared in a terminal
-   transcript. Rotate before any shared environment.
+10. **Stock operations are not idempotent.** Retrying a reserve after a
+    timeout double-reserves (M8).
+11. **`.env` holds development secrets** that have appeared in a terminal
+    transcript. Rotate before any shared environment.
 
 ---
 
@@ -673,6 +772,14 @@ carries `requested` and `available`. Check the ledger with
 
 **`npm run demo:oversell` reports 429s** — `reserve` is limited to 30/min.
 Wait a minute, or lower `--concurrency`.
+
+**Events are published but nothing reacts** — check the Cart Service log for
+`consuming RabbitMQ queue "ecommerce_events"`. If it says
+`RabbitMQ consumer did not start`, the broker is not running. Every service
+still serves HTTP without it; only the catalogue flags go stale.
+
+**`column cart_items.catalogue_price does not exist`** — run
+`npm run db:migrate`.
 
 **`401 Authentication required` on `/api/cart`** — every cart route needs
 `Authorization: Bearer <token>`. Register or log in first.

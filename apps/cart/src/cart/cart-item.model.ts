@@ -55,6 +55,24 @@ export class CartItem extends Model<CartItem> {
   @Column({ type: DataType.INTEGER, allowNull: false, defaultValue: 1 })
   quantity!: number;
 
+  /**
+   * What the catalogue says now, set by the `product.price_changed` handler.
+   * NULL means the snapshot still matches the catalogue.
+   *
+   * Shown ALONGSIDE unitPrice, never instead of it — the customer keeps
+   * seeing the price they were shown, and the UI can say what moved.
+   */
+  @Column({ type: DataType.DECIMAL(12, 2), allowNull: true })
+  cataloguePrice!: string | null;
+
+  /**
+   * Set by the `product.archived` consumer. The line stays in the cart —
+   * silently removing an item alarms a customer more than showing it greyed
+   * out with a reason.
+   */
+  @Column({ type: DataType.DATE, allowNull: true })
+  unavailableAt!: Date | null;
+
   @CreatedAt
   override createdAt!: Date;
 

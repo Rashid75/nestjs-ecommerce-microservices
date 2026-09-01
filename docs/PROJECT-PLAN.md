@@ -10,14 +10,14 @@ bring it back, rather than a vague "later".
 
 |                         |                                             |
 | ----------------------- | ------------------------------------------- |
-| **Milestones complete** | 6 of 15                                     |
+| **Milestones complete** | 7 of 15                                     |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart     |
-| **Infrastructure**      | PostgreSQL 18, Redis 7                      |
+| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3          |
 | **Databases**           | `ecommerce_auth_db`, `ecommerce_product_db` |
-| **Next milestone**      | 7 — RabbitMQ messaging                      |
+| **Next milestone**      | 8 — Order Service and the Saga              |
 
 ```text
-M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ░░ M8 ░░
+M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ░░
 M9 ░░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
@@ -363,17 +363,73 @@ outstanding claim.
 
 ---
 
-## ⬜ Milestone 7 — RabbitMQ Messaging
+## ✅ Milestone 7 — RabbitMQ Messaging
 
-**Next up.** Exchanges, queues, bindings, routing keys, acknowledgements, prefetch, retry
-and dead-letter queues. Events: `UserRegistered`, `OrderCreated`,
-`OrderConfirmed`, `PaymentSucceeded`, `InventoryReserved`, and the rest.
+**Status: complete.**
+
+Built with **NestJS's built-in RabbitMQ integration**, not a custom framework.
+The guiding rule for this project: _keep the implementation simple until the
+lesson requires more complexity._
+
+### Delivered
+
+**Publishers** — `ClientsModule.registerAsync()` in each publishing feature
+module, giving a `ClientProxy` to inject:
+
+| Service   | Emits                                       |
+| --------- | ------------------------------------------- |
+| Auth      | `user.registered`                           |
+| Product   | `product.price_changed`, `product.archived` |
+| Inventory | `inventory.reserved`, `inventory.released`  |
+
+**Consumer** — the Cart Service is a **hybrid application**: HTTP and RabbitMQ
+in one process. `CatalogueEventsController` carries `@EventPattern()`
+handlers that flag cart lines when a product's price changes or it is
+archived. It does not reprice — the snapshot is what the customer was shown.
+
+**Contracts** — pattern strings and payload types in `@ecommerce/contracts`,
+so publisher and consumer cannot drift on spelling.
+
+### Deliberately NOT built
+
+Everything below was considered and left out, because nothing in this
+milestone needs it yet:
+
+| Not built                                        | Comes back when                                        |
+| ------------------------------------------------ | ------------------------------------------------------ |
+| Custom connection manager                        | Never — Nest owns the connection                       |
+| Custom publisher / consumer abstraction          | Never, unless Nest's stops fitting                     |
+| Retry with backoff                               | A handler failure needs surviving                      |
+| Dead-letter queue                                | A poison message actually blocks a queue               |
+| Idempotency ledger                               | A duplicate delivery causes real damage — M8           |
+| Transactional outbox                             | A lost event means a lost order — M8                   |
+| Event envelope (eventId, correlationId, version) | Tracing (M11) and idempotency (M8) need them           |
+| Topic exchange with bindings                     | A second service needs its own copy of the same events |
+
+### Key decisions
+
+| Decision                                          | Why                                                                                                                                                                                                   |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@nestjs/microservices` over raw amqplib          | Fewer moving parts, idiomatic Nest, nothing to maintain. Learn the framework's answer before building your own.                                                                                       |
+| `emit()`, not `send()`                            | `emit` is fire-and-forget for EVENTS; `send` is request/response for COMMANDS (`@MessagePattern`). Nobody replies to "a user registered".                                                             |
+| Past-tense event names                            | `user.registered`, never `send.welcome.email`. The second couples Auth to the existence of an email system.                                                                                           |
+| One shared queue                                  | Nest's RMQ transport is queue-centric. Simple, with a real limitation: a second consuming service would COMPETE for messages rather than each getting a copy. Exchanges answer that, when we need it. |
+| `ClientsModule` in the FEATURE module             | It is not global, so the provider must live where it is injected. Putting it in AppModule fails with "Nest can't resolve dependencies ... EVENTS_CLIENT".                                             |
+| HTTP listener started BEFORE the message listener | `startAllMicroservices()` waits for the broker and retries indefinitely. Awaiting it first means a down broker takes the whole HTTP API down with it.                                                 |
+| Flag cart lines, never reprice them               | The snapshot is what the customer was shown. Checkout re-confirms (M8).                                                                                                                               |
+
+### Verified
+
+83 unit tests across seven projects; all five services build, lint and boot.
+With RabbitMQ **stopped**: every service starts, registration still returns
+201, and the catalogue API still serves — the broker is genuinely optional
+for the HTTP paths.
 
 ---
 
 ## ⬜ Milestone 8 — Order Service and Distributed Workflow
 
-The central workflow: validate cart → reserve inventory → process payment →
+**Next up.** The central workflow: validate cart → reserve inventory → process payment →
 confirm order → publish. Saga pattern, compensation, eventual consistency,
 idempotency.
 

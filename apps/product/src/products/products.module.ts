@@ -1,4 +1,12 @@
+import { EVENTS_CLIENT } from '@ecommerce/contracts';
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  ClientsModule,
+  type RmqOptions,
+  Transport,
+} from '@nestjs/microservices';
+import type { ProductEnv } from '../config/env.validation';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { Category } from '../categories/category.model';
 import { Product } from './product.model';
@@ -19,7 +27,39 @@ import { ProductsService } from './products.service';
  * before it soft-deletes; it does not need the model.
  */
 @Module({
-  imports: [SequelizeModule.forFeature([Product, Category])],
+  imports: [
+    // The RabbitMQ publisher, registered in the module whose service uses it.
+    //
+    // `ClientsModule` is NOT global, so the provider has to live where it is
+    // injected. Putting it in AppModule looks tidier and fails with
+    // "Nest can't resolve dependencies ... EVENTS_CLIENT" — the client
+    // belongs next to its consumer.
+    ClientsModule.registerAsync([
+      {
+        name: EVENTS_CLIENT,
+        inject: [ConfigService],
+        // The return type is annotated so TypeScript checks the shape here
+        // rather than deep inside Nest's overloads, where the error is four
+        // levels of union mismatch and says almost nothing.
+        useFactory: (config: ConfigService<ProductEnv, true>): RmqOptions => {
+          const url: string = config.get('RABBITMQ_URL', { infer: true });
+          const queue: string = config.get('RABBITMQ_QUEUE', { infer: true });
+
+          return {
+            transport: Transport.RMQ,
+            options: {
+              urls: [url],
+              queue,
+              // Survives a broker restart. Nest publishes persistent
+              // messages by default, which is the other half of that.
+              queueOptions: { durable: true },
+            },
+          };
+        },
+      },
+    ]),
+    SequelizeModule.forFeature([Product, Category]),
+  ],
   controllers: [ProductsController],
   providers: [ProductsService, ProductsRepository, ProductsCacheService],
   exports: [ProductsRepository],

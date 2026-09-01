@@ -33,3 +33,6 @@ export * from './lib/inventory/inventory.dto';
 
 // --- cart ---
 export * from './lib/cart/cart.dto';
+
+// --- events ---
+export * from './lib/events/events';

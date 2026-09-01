@@ -27,6 +27,8 @@ export interface CartEnv {
 
   PRODUCT_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
+  RABBITMQ_URL: string;
+  RABBITMQ_QUEUE: string;
 }
 
 export const cartEnvSchema = Joi.object({
@@ -50,4 +52,13 @@ export const cartEnvSchema = Joi.object({
     .min(100)
     .max(30_000)
     .default(5_000),
+  // NestJS's RMQ transport manages the connection, reconnects and channels.
+  // A broker that is down does not stop a service booting; publishes fail
+  // and are logged.
+  RABBITMQ_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .required(),
+
+  // The queue publishers send to and the Cart Service consumes from.
+  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
 });

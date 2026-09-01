@@ -127,6 +127,12 @@ function toDto(record: CartRecord): CartDto {
     quantity: item.quantity,
     lineTotal: lineTotal(item.unitPrice, item.quantity),
     addedAt: item.addedAt,
+    // Only present when something actually changed, so a normal cart is not
+    // cluttered with nulls.
+    ...(item.cataloguePrice !== null
+      ? { cataloguePrice: item.cataloguePrice }
+      : {}),
+    ...(item.unavailable ? { unavailable: true } : {}),
   }));
 
   return {

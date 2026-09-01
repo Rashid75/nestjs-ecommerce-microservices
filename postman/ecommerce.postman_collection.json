@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
     "name": "E-Commerce Microservices",
-    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 6 — Gateway + Auth + Product + Inventory + Cart, with Redis caching, rate limiting and gateway authentication.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 7 — Five services over HTTP and RabbitMQ, with Redis caching, rate limiting, gateway authentication and event-driven consumers.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -2477,6 +2477,239 @@
               "path": ["{{apiPrefix}}", "cart"]
             },
             "description": "Removes the lines and **keeps the cart row**.\n\nDeleting it would work and would be wrong: the row carries the identity and creation time that abandonment analytics and recovery emails rely on. Carts are never deleted — they transition ACTIVE → CONVERTED or ABANDONED.\n\nThat is also the strongest argument for **PostgreSQL over Redis** here. \"Which carts contain the product we just discontinued?\" and \"email everyone with a cart older than a day\" are WHERE clauses in Postgres and full keyspace scans in Redis. Add durability (Redis loses up to a second on the default AOF setting) and transactional conversion to an order, and the supposed speed win — a few hundred microseconds on an operation already under a millisecond — stops being worth anything.\n\nRedis IS used in this milestone, for exactly one thing: caching token introspection at the gateway. That is the difference between using a tool because it fits and using it because it is installed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 · Messaging (events)",
+      "description": "**Run folders 1, 5 and 8 first** — a token, a product, and that product in your cart.\n\nRequires RabbitMQ:\n\n```\ndocker run -d --name ecommerce-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management\n```\n\nManagement UI: http://localhost:15672 (guest / guest).\n\nMessaging is built with **NestJS's built-in integration** — `@nestjs/microservices` with `Transport.RMQ`. Publishers call `ClientProxy.emit()`; the Cart Service consumes with `@EventPattern()`.",
+      "item": [
+        {
+          "name": "55 Snapshot before — note the cart price",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const line = pm.response.json().items.find((i) => i.productId === pm.environment.get('productId'));",
+                  "pm.test('the line exists — run folder 8 first', () => pm.expect(line).to.exist);",
+                  "pm.environment.set('snapshotPrice', line.unitPrice);",
+                  "console.log('snapshot unitPrice = ' + line.unitPrice);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "Records the snapshot price so the next requests can show it does not move."
+          }
+        },
+        {
+          "name": "56 Change the price (publishes product.price_changed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the catalogue now says 24.99', () => {",
+                  "  pm.expect(pm.response.json().price).to.eql('24.99');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 24.99\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "The Product Service compares before and after and publishes **only what actually changed** — `product.price_changed`, carrying the PREVIOUS price as well as the new one.\n\nAn event that says \"the price changed\" without saying what it changed *from* forces every consumer to have kept its own copy, which defeats the point of publishing it.\n\nNote what is NOT published: a generic `product.updated` with the whole row. That is the lazy option — it pushes the diffing work onto every consumer, each of which must work out whether it cares.\n\nWatch the Product Service log for `published product.price_changed`, then the Cart Service log for `flagged 1 cart line(s)`."
+          }
+        },
+        {
+          "name": "57 The cart line was FLAGGED, not repriced",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const line = pm.response.json().items.find((i) => i.productId === pm.environment.get('productId'));",
+                  "",
+                  "pm.test('the snapshot is UNCHANGED', () => {",
+                  "  // The customer keeps seeing the price they were shown.",
+                  "  pm.expect(line.unitPrice).to.eql(pm.environment.get('snapshotPrice'));",
+                  "});",
+                  "",
+                  "pm.test('the catalogue price is recorded alongside it', () => {",
+                  "  pm.expect(line.cataloguePrice).to.eql('24.99');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "The consumer ran, and this is the whole point of the design:\n\n- `unitPrice` — **unchanged**. Quietly repricing would make the basket total move while the customer looks at it.\n- `cataloguePrice` — what the catalogue says now, so the UI can show \"was 19.99, now 24.99\".\n\n**Snapshot what the customer was shown; flag what moved; re-check before taking money.** The re-check belongs to checkout (Milestone 8).\n\nIf `cataloguePrice` is still absent, wait a second and re-send — this is asynchronous by design. That lag *is* eventual consistency, and it is the price of the decoupling."
+          }
+        },
+        {
+          "name": "58 Archive the product (publishes product.archived)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status is ARCHIVED', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('ARCHIVED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ARCHIVED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+            },
+            "description": "A different event on the same aggregate, so a consumer binds to exactly the one it cares about rather than filtering a firehose.\n\nBoth arrive at the same queue, `cart.catalogue-events`, because both handlers touch the same table. The bindings are named explicitly rather than using `product.*`, so a future product event becomes a deliberate decision to handle rather than something that silently starts arriving."
+          }
+        },
+        {
+          "name": "59 The line is marked unavailable — and still there",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const line = pm.response.json().items.find((i) => i.productId === pm.environment.get('productId'));",
+                  "",
+                  "pm.test('the line was NOT removed', () => {",
+                  "  // Silently deleting an item alarms a customer far more than showing",
+                  "  // it greyed out with a reason.",
+                  "  pm.expect(line).to.exist;",
+                  "});",
+                  "",
+                  "pm.test('it is flagged unavailable', () => {",
+                  "  pm.expect(line.unavailable).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "The consumer flagged the line rather than deleting it.\n\nNote what this crossed: the Cart Service learned about a catalogue change **without calling the Product Service**. No synchronous hop, no coupling to its availability, no shared database. That is what asynchronous messaging buys — and the cost is that the flag arrives *eventually*, not instantly."
+          }
+        },
+        {
+          "name": "60 ⚡ Run the demo script",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "console.log('');",
+                  "console.log('    npm run demo:messaging');",
+                  "console.log('');",
+                  "console.log('Then open http://localhost:15672 (guest/guest).');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
+            },
+            "description": "## See the whole flow in one command\n\n```\nnpm run demo:messaging\n```\n\nCreates a product, puts it in a cart, changes the catalogue price, and shows the line flagged without being repriced — with the ~1 second lag that *is* eventual consistency.\n\n### Then look at the management UI\n\nhttp://localhost:15672 — guest / guest\n\n| Where | What to look at |\n| --- | --- |\n| **Queues → ecommerce_events** | The queue Nest created for you. Watch the depth spike and drain. |\n| **Connections** | One per running service |\n| **Queues → ecommerce_events → Get messages** | Peek at a raw message — note Nest wraps your payload in `{ pattern, data }` |\n\n### What is deliberately missing\n\nNo retry, no dead-letter queue, no idempotency. Stop the Cart Service, change a price, start it again — the event is waiting in the queue, because the queue is durable. But make a *handler* fail and the message is simply lost.\n\nThat is fine for these events and would not be for an order. Each of those mechanisms arrives in the milestone that needs it, rather than being built upfront."
           }
         }
       ]

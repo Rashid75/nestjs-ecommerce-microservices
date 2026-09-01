@@ -14,6 +14,8 @@ export interface CartItemRecord {
   unitPrice: string;
   quantity: number;
   addedAt: Date;
+  cataloguePrice: string | null;
+  unavailable: boolean;
 }
 
 export interface CartRecord {
@@ -230,6 +232,9 @@ function toRecord(cart: Cart): CartRecord {
       unitPrice: String(item.unitPrice),
       quantity: item.quantity,
       addedAt: item.createdAt,
+      cataloguePrice:
+        item.cataloguePrice === null ? null : String(item.cataloguePrice),
+      unavailable: item.unavailableAt !== null,
     })),
   };
 }

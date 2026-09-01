@@ -1,4 +1,5 @@
 import { StockMovementType } from '@ecommerce/contracts';
+import type { ClientProxy } from '@nestjs/microservices';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import {
   InsufficientStockError,
@@ -51,8 +52,32 @@ function makeRepo(): RepoFake {
   };
 }
 
-function makeService(repo: RepoFake): InventoryService {
-  return new InventoryService(repo as unknown as InventoryRepository);
+/**
+ * A ClientProxy that records what would have been emitted.
+ *
+ * `emit` returns an Observable in real life; the service does not subscribe
+ * to it (fire and forget), so returning a plain object is faithful enough
+ * for these tests. What matters is WHICH pattern was emitted and WHEN.
+ */
+function makePublisher(): { fake: ClientProxy; published: string[] } {
+  const published: string[] = [];
+  const fake = {
+    emit: (pattern: string) => {
+      published.push(pattern);
+      return { subscribe: () => undefined };
+    },
+  } as unknown as ClientProxy;
+  return { fake, published };
+}
+
+function makeService(
+  repo: RepoFake,
+  publisher: ClientProxy = makePublisher().fake,
+): InventoryService {
+  return new InventoryService(
+    repo as unknown as InventoryRepository,
+    publisher,
+  );
 }
 
 function makeRecord(overrides: Partial<InventoryRecord> = {}): InventoryRecord {
@@ -141,6 +166,45 @@ describe('InventoryService', () => {
       await expect(
         makeService(repo).reserve(PRODUCT_ID, { quantity: 1 }),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('events', () => {
+    it('publishes inventory.reserved on a successful reservation', async () => {
+      const repo = makeRepo();
+      repo.reserve.mockResolvedValue(makeRecord());
+      const { fake, published } = makePublisher();
+
+      await makeService(repo, fake).reserve(PRODUCT_ID, { quantity: 1 });
+
+      expect(published).toEqual(['inventory.reserved']);
+    });
+
+    it('publishes NOTHING when the reservation was refused', async () => {
+      const repo = makeRepo();
+      repo.reserve.mockRejectedValue(
+        new InsufficientStockError(PRODUCT_ID, 5, 2),
+      );
+      const { fake, published } = makePublisher();
+
+      await expect(
+        makeService(repo, fake).reserve(PRODUCT_ID, { quantity: 5 }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // A "StockReserved" event for stock that was never reserved is a lie
+      // that every downstream consumer would act on. Publishing belongs
+      // AFTER the write succeeded, never alongside it.
+      expect(published).toEqual([]);
+    });
+
+    it('publishes inventory.released on a successful release', async () => {
+      const repo = makeRepo();
+      repo.release.mockResolvedValue(makeRecord({ reserved: 0 }));
+      const { fake, published } = makePublisher();
+
+      await makeService(repo, fake).release(PRODUCT_ID, { quantity: 2 });
+
+      expect(published).toEqual(['inventory.released']);
     });
   });
 

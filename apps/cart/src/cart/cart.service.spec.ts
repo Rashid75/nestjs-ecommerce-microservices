@@ -65,6 +65,8 @@ function makeItem(
     unitPrice,
     quantity,
     addedAt: new Date('2026-08-31T00:00:00Z'),
+    cataloguePrice: null,
+    unavailable: false,
   };
 }
 

@@ -13,6 +13,7 @@ import {
   DuplicateFieldError,
   RelatedRecordNotFoundError,
 } from '../common/domain-errors';
+import type { ClientProxy } from '@nestjs/microservices';
 import type { ProductsCacheService } from './products-cache.service';
 import { ProductRecord, ProductsRepository } from './products.repository';
 import { ProductsService } from './products.service';
@@ -75,11 +76,27 @@ function makeCache(): { fake: ProductsCacheService; invalidated: string[] } {
   return { fake, invalidated };
 }
 
+function makePublisher(): { fake: ClientProxy; published: string[] } {
+  const published: string[] = [];
+  const fake = {
+    emit: (pattern: string) => {
+      published.push(pattern);
+      return { subscribe: () => undefined };
+    },
+  } as unknown as ClientProxy;
+  return { fake, published };
+}
+
 function makeService(
   repo: RepoFake,
   cache: ProductsCacheService = makeCache().fake,
+  publisher: ClientProxy = makePublisher().fake,
 ): ProductsService {
-  return new ProductsService(repo as unknown as ProductsRepository, cache);
+  return new ProductsService(
+    repo as unknown as ProductsRepository,
+    cache,
+    publisher,
+  );
 }
 
 function makeProduct(overrides: Partial<ProductRecord> = {}): ProductRecord {
@@ -178,6 +195,10 @@ describe('ProductsService', () => {
   describe('update', () => {
     it('sends ONLY the fields present in the patch', async () => {
       const repo = makeRepo();
+      // The service reads the row BEFORE updating, because the
+      // product.price_changed event carries the previous price and there is
+      // no way to recover it afterwards.
+      repo.findById.mockResolvedValue(makeProduct({ price: '1899.00' }));
       repo.update.mockResolvedValue(makeProduct({ price: '1599.00' }));
 
       await makeService(repo).update('22222222-2222-4222-8222-222222222222', {
@@ -211,6 +232,42 @@ describe('ProductsService', () => {
           name: 'New name',
         }),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('events', () => {
+    it('publishes product.price_changed with the PREVIOUS price', async () => {
+      const repo = makeRepo();
+      repo.findById.mockResolvedValue(makeProduct({ price: '1899.00' }));
+      repo.update.mockResolvedValue(makeProduct({ price: '1599.00' }));
+      const { fake, published } = makePublisher();
+
+      await makeService(repo, makeCache().fake, fake).update(
+        '22222222-2222-4222-8222-222222222222',
+        { price: 1599 },
+      );
+
+      // An event that says "the price changed" without saying what it
+      // changed FROM forces every consumer to keep its own copy, which
+      // defeats the point of publishing it.
+      expect(published).toEqual(['product.price_changed']);
+    });
+
+    it('publishes nothing when the price did not move', async () => {
+      const repo = makeRepo();
+      repo.findById.mockResolvedValue(makeProduct({ price: '1899.00' }));
+      repo.update.mockResolvedValue(makeProduct({ price: '1899.00' }));
+      const { fake, published } = makePublisher();
+
+      await makeService(repo, makeCache().fake, fake).update(
+        '22222222-2222-4222-8222-222222222222',
+        { name: 'A new name' },
+      );
+
+      // A generic `product.updated` carrying the whole row would fire here
+      // and push the diffing work onto every consumer. Specific past-tense
+      // events let a consumer bind to exactly what it cares about.
+      expect(published).toEqual([]);
     });
   });
 
@@ -274,6 +331,7 @@ describe('ProductsService', () => {
 
     it('invalidates the detail key AFTER a successful update', async () => {
       const repo = makeRepo();
+      repo.findById.mockResolvedValue(makeProduct({ price: '1899.00' }));
       repo.update.mockResolvedValue(makeProduct({ price: '1599.00' }));
       const { fake, invalidated } = makeCache();
 

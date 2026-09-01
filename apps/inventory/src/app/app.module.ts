@@ -21,6 +21,7 @@ import { InventoryModule } from '../inventory/inventory.module';
       cache: true,
     }),
     DatabaseModule,
+
     InventoryModule,
   ],
 })
