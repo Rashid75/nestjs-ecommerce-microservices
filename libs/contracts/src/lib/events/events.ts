@@ -25,6 +25,9 @@ export const EventPattern = {
 
   StockReserved: 'inventory.reserved',
   StockReleased: 'inventory.released',
+
+  OrderConfirmed: 'order.confirmed',
+  OrderCancelled: 'order.cancelled',
 } as const;
 
 export type EventPatternValue =
@@ -91,4 +94,49 @@ export interface StockReleasedPayload {
   productId: string;
   quantity: number;
   available: number;
+}
+
+export interface OrderLinePayload {
+  productId: string;
+  sku: string;
+  quantity: number;
+  unitPrice: string;
+}
+
+/**
+ * An order was placed.
+ *
+ * `order.confirmed`, not `order.created`, because the two mean the same
+ * thing today: there is no workflow that can leave an order half-made, so an
+ * order exists only once it is CONFIRMED. If a checkout workflow arrives
+ * later, `order.created` becomes a separate, earlier fact — and consumers
+ * that care about a FINISHED order keep listening to this one, unchanged.
+ */
+export interface OrderConfirmedPayload {
+  orderId: string;
+  orderNumber: string;
+  userId: string;
+  /**
+   * The cart this order was built from.
+   *
+   * Carried in the message rather than looked up, so the consumer converts
+   * exactly THIS cart and not "whatever is active now". Between publishing
+   * and consuming, the customer may have started a new cart — and emptying
+   * that one would take away a basket they are still filling.
+   *
+   * This is what eventual consistency actually costs: a consumer must be
+   * written for the world as it is when the message ARRIVES, not as it was
+   * when the message was sent.
+   */
+  cartId: string;
+  total: string;
+  currency: string;
+  lines: OrderLinePayload[];
+}
+
+export interface OrderCancelledPayload {
+  orderId: string;
+  orderNumber: string;
+  userId: string;
+  reason: string;
 }

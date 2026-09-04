@@ -59,14 +59,15 @@ ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_
  auth_db   product_db inventory_db cart_db   order_db
                           schema from migrations only
 
-Checkout today (M8 step 1 — the simple version, on purpose):
-   read the cart → write the order and its lines in ONE local transaction
-   No stock reserved, cart not emptied, no event published. Step 2 of M8
-   adds the saga, the compensation and the outbox that fix those.
+Checkout: read the cart → write the order and its lines in ONE local
+   transaction → publish order.confirmed → the Cart Service converts that
+   cart when it hears about it. No stock is reserved yet — reserving needs
+   an undo, and that workflow is deferred with a trigger written down.
 
            RabbitMQ :5672  ·  queue ecommerce_events
   user.registered · product.price_changed · product.archived
   inventory.reserved · inventory.released
+  order.confirmed · order.cancelled
 
            Redis :6379
   ecom:gateway:*   rate-limit counters   REQUIRED by the gateway
@@ -194,6 +195,7 @@ ecommerce/
 │   └── order/                        INTERNAL · 3005 · inspector 9234
 │       └── src/
 │           ├── orders/               models, repository, service, controller
+│           │                         publishes order.confirmed / .cancelled
 │           ├── cart/                 reads the cart it builds the order from
 │           ├── database/             migrations: orders + items
 │           └── main.ts
@@ -461,6 +463,48 @@ That order matters: `startAllMicroservices()` waits for the broker and
 retries indefinitely, so awaiting it first means a down RabbitMQ takes the
 whole HTTP API down with it.
 
+### Publishing after the commit, and what that costs
+
+There is no transaction that spans PostgreSQL and RabbitMQ, so a service that
+changes state and announces it has exactly two orderings to choose from, and
+both can fail:
+
+| Order                    | The failure it admits                                                           |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| publish, **then** commit | the commit fails and the world has been told about an order that does not exist |
+| commit, **then** publish | the process dies in between; the row exists and nobody is ever told             |
+
+Every publisher here takes the second. For orders that means a cart that
+stays full after a successful order — visible, harmless, and fixable by the
+customer. The other failure invents orders, which is not.
+
+The proper fix is a **transactional outbox**: write the event into the same
+transaction as the row, and let a separate relay publish it. It is deferred
+until a lost event costs something real, and the trigger is written down in
+[docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md).
+
+### Consumers must be repeatable
+
+RabbitMQ delivers **at-least-once**, so every handler will eventually run
+twice for the same message. The cheapest defence is an operation that is
+naturally repeatable:
+
+```ts
+UPDATE carts SET status = 'CONVERTED' WHERE id = :cartId AND status = 'ACTIVE'
+```
+
+The second delivery updates no rows and that is the correct outcome — no
+ledger of processed event ids needed. A processed-events table is for work
+that genuinely cannot be repeated: sending an email, charging a card.
+
+### The world when the message arrives, not when it was sent
+
+`order.confirmed` carries the `cartId`. The consumer converts **that** cart,
+not "the user's active cart" — because if the broker was down for a minute,
+the customer may already have started a new one, and emptying it would take
+away a basket they are still filling. That is what eventual consistency
+actually asks of a consumer.
+
 ### Events are facts, not instructions
 
 `user.registered`, never `send.welcome.email`. A command says "do this" and
@@ -549,10 +593,11 @@ no `:cartId` to tamper with.
 `POST /api/orders` takes an **empty body**. The lines, the prices and the
 owner all come from the server — from the cart, and from the verified token.
 
-This is **step 1 of Milestone 8**, and it is deliberately naive: it does not
-reserve stock, does not empty the cart, and publishes no event. Those are
-real defects you can reproduce in Postman, and each one is fixed in step 2 by
-a named mechanism. See [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md).
+Placing an order publishes `order.confirmed`, and the Cart Service marks that
+cart `CONVERTED` when it arrives — so the cart empties itself a moment later,
+not instantly. **Stock is still not reserved at checkout**, which is a real
+gap recorded with its trigger in
+[docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md).
 
 ### Listing query parameters
 
@@ -607,10 +652,10 @@ do money arithmetic.
 
 Two files in [`postman/`](postman), both committed:
 
-| File                                       | What it is                                 |
-| ------------------------------------------ | ------------------------------------------ |
-| `ecommerce.postman_collection.json`        | The requests, with a short note on each    |
-| `ecommerce.local.postman_environment.json` | URLs, ports and test credentials           |
+| File                                       | What it is                              |
+| ------------------------------------------ | --------------------------------------- |
+| `ecommerce.postman_collection.json`        | The requests, with a short note on each |
+| `ecommerce.local.postman_environment.json` | URLs, ports and test credentials        |
 
 **Import both**: Postman → _Import_ → drag both files in. Then select
 **`ecommerce · local`** in the environment picker — a collection-level

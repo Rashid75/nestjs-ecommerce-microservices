@@ -79,14 +79,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "auth",
-                "register"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "register"]
             },
             "description": "A fresh email per run, so the unique index never turns this into a 409."
           }
@@ -123,14 +117,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "auth",
-                "login"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "login"]
             },
             "description": "200, not 201 — logging in creates nothing."
           }
@@ -147,14 +135,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "auth",
-                "me"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "auth", "me"]
             },
             "description": "The profile behind the current token."
           }
@@ -212,13 +194,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "categories"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "categories"]
             },
             "description": "Slug and name are both uniquely indexed, so both are generated per run."
           }
@@ -235,13 +212,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "categories"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "categories"]
             }
           }
         },
@@ -291,13 +263,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"]
             },
             "description": "Note the response: `price` comes back as the string \"1899.00\", and `status` is DRAFT. Nothing goes on sale by accident."
           }
@@ -327,14 +294,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
             },
             "description": "Required before the Cart folder: a DRAFT product cannot be added to a cart."
           }
@@ -351,14 +312,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
             }
           }
         },
@@ -374,13 +329,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"]
             }
           }
         },
@@ -396,13 +346,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products"
-              ],
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products"],
               "query": [
                 {
                   "key": "categoryId",
@@ -457,14 +402,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
             },
             "description": "A partial update: send only what changes. With RabbitMQ running this also publishes `product.price_changed`."
           }
@@ -511,13 +450,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory"]
             },
             "description": "Opens at zero. Nothing arrives by magic."
           }
@@ -547,15 +481,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/receive",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}",
-                "receive"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "receive"]
             },
             "description": "Goods arrived: `onHand` goes up."
           }
@@ -585,15 +512,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/reserve",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}",
-                "reserve"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "reserve"]
             },
             "description": "Promised to an order. `onHand` is unchanged — the goods are still in the warehouse — but `available` drops."
           }
@@ -623,15 +543,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/release",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}",
-                "release"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "release"]
             },
             "description": "The promise is cancelled. This is the undo for a reservation."
           }
@@ -661,15 +574,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/fulfil",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}",
-                "fulfil"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "fulfil"]
             },
             "description": "Shipped: BOTH `onHand` and `reserved` go down."
           }
@@ -699,15 +605,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/adjust",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}",
-                "adjust"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "adjust"]
             },
             "description": "A signed correction with a mandatory reason. An unexplained adjustment is indistinguishable from theft."
           }
@@ -724,9 +623,7 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/movements",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
+              "host": ["{{gatewayUrl}}"],
               "path": [
                 "{{apiPrefix}}",
                 "inventory",
@@ -749,14 +646,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
             }
           }
         }
@@ -773,9 +664,7 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": [
-                  "pm.environment.set('cartId', pm.response.json().id);"
-                ]
+                "exec": ["pm.environment.set('cartId', pm.response.json().id);"]
               }
             }
           ],
@@ -789,13 +678,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
             },
             "description": "An empty cart, not a 404. Calling it repeatedly yields the same one."
           }
@@ -825,14 +709,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart",
-                "items"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items"]
             },
             "description": "Note what the response contains that the request did not: `name` and `unitPrice`. Both are snapshotted by the server from the catalogue."
           }
@@ -862,14 +740,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart",
-                "items"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items"]
             },
             "description": "An upsert: quantity 3 on one line, not a second line."
           }
@@ -899,15 +771,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart",
-                "items",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
             },
             "description": "PATCH sets the quantity; it is not a delta."
           }
@@ -924,15 +789,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart",
-                "items",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
             }
           }
         },
@@ -948,13 +806,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
             },
             "description": "Empties it and KEEPS it — the row carries the identity abandonment analytics rely on."
           }
@@ -963,7 +816,7 @@
     },
     {
       "name": "5 · Orders",
-      "description": "Milestone 8, step 1 — the simple version. `POST /orders` reads your cart, copies the lines into an order in one local transaction, and returns it CONFIRMED.\n\nTwo requests near the end show what it does NOT do yet: the cart is not emptied, and no stock is reserved. Step 2 adds the saga and the outbox that fix both.",
+      "description": "Milestone 8. `POST /orders` reads your cart, copies the lines into an order in one local transaction, returns it CONFIRMED, and publishes `order.confirmed`.\n\nThe Cart Service consumes that event and marks the cart CONVERTED — so the cart empties itself **a moment later**, not instantly. Needs RabbitMQ running.\n\nOne gap is still open and marked below: no stock is reserved at checkout.",
       "item": [
         {
           "name": "Add something to the cart",
@@ -990,14 +843,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart",
-                "items"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart", "items"]
             },
             "description": "So there is something to order."
           }
@@ -1040,13 +887,8 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "orders"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders"]
             },
             "description": "An EMPTY body. The lines come from the cart and the owner from the verified token — a client that could name its own prices would order a laptop for a penny."
           }
@@ -1063,14 +905,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "orders",
-                "{{orderId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders", "{{orderId}}"]
             }
           }
         },
@@ -1086,13 +922,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "orders"
-              ],
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders"],
               "query": [
                 {
                   "key": "page",
@@ -1108,7 +939,7 @@
           }
         },
         {
-          "name": "The cart is still full (step 2 fixes this)",
+          "name": "The cart converted itself (give it a second)",
           "request": {
             "method": "GET",
             "header": [
@@ -1119,19 +950,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "cart"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "cart"]
             },
-            "description": "Emptying the cart means writing to another service’s database, which cannot join the transaction that wrote the order. Step 2 publishes `order.confirmed` and lets the Cart Service convert its own cart."
+            "description": "A NEW empty cart: the old one was marked CONVERTED by the `order.confirmed` event, and `GET /cart` creates a fresh one.\n\n**This is not instant.** The Order Service published the event after its commit; RabbitMQ delivered it; the Cart Service handled it. If you still see the old cart, wait a second and re-send — or check that RabbitMQ is running. That gap is what eventual consistency means in practice."
           }
         },
         {
-          "name": "Stock did not move (step 2 fixes this)",
+          "name": "⚠ Stock did not move — still open",
           "request": {
             "method": "GET",
             "header": [
@@ -1142,16 +968,10 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "inventory",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
             },
-            "description": "`reserved` is unchanged: nothing calls the Inventory Service, so two customers could both order the last unit. Step 2 reserves per line — the first write into another service’s database, and therefore the first thing that has to be undoable."
+            "description": "`reserved` is unchanged: nothing calls the Inventory Service at checkout, so two customers can both order the last unit.\n\nFixing it means reserving stock per line — a write into another service’s database, which then needs an undo if a later step fails. That compensating workflow is deliberately not built; it is in the deferred table in `docs/PROJECT-PLAN.md` with the trigger that should bring it back."
           }
         },
         {
@@ -1179,17 +999,10 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}/cancel",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "orders",
-                "{{orderId}}",
-                "cancel"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders", "{{orderId}}", "cancel"]
             },
-            "description": "A status change and nothing more today, because nothing was reserved and nobody was charged. In step 2 this has to release stock."
+            "description": "A status change, and an `order.cancelled` event. Nothing was reserved and nobody was charged, so there is nothing to undo — the event is published only after the UPDATE actually matched a row."
           }
         }
       ]
@@ -1210,14 +1023,8 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": [
-                "{{gatewayUrl}}"
-              ],
-              "path": [
-                "{{apiPrefix}}",
-                "products",
-                "{{productId}}"
-              ]
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
             },
             "description": "Soft delete: the row stays and `deleted_at` is set, so orders that reference this product still make sense. Kept in its own folder because deleting the product breaks every folder above it."
           }

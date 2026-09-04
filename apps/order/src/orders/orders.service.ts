@@ -2,19 +2,25 @@ import {
   buildPageMeta,
   CancelOrderDto,
   CartItemDto,
+  EventPattern,
+  EVENTS_CLIENT,
   OrderDto,
   OrderStatus,
   PageMetaDto,
   QueryOrdersDto,
+  type OrderCancelledPayload,
+  type OrderConfirmedPayload,
 } from '@ecommerce/contracts';
 import { lineTotal, sumDecimals } from '@ecommerce/money';
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
 import { CartClientService } from '../cart/cart-client.service';
 import {
   OrderLineInput,
@@ -34,31 +40,24 @@ const DEFAULT_PAGE_SIZE = 20;
  *   3. copy the lines into an order, in one local transaction
  *   4. return the order, CONFIRMED
  *
- * WHAT IT DELIBERATELY DOES NOT DO YET — and this list is the point of
- * building it this way. Every item is a real defect, and each one motivates
- * a specific piece of machinery in step 2 of this milestone:
+ * …then announces it. `order.confirmed` goes onto RabbitMQ, and the Cart
+ * Service — which owns its own database and cannot be written to from here —
+ * marks that cart CONVERTED when it hears about it.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO, and these are honest gaps rather than
+ * oversights:
  *
  *   NO STOCK RESERVATION. Two customers can both order the last unit. The
- *   Inventory Service already has an atomic `reserve`; nothing calls it. The
- *   moment we do, we have changed another service's database — and if a
- *   later step fails we have to UNDO that, which is what a saga is.
+ *   Inventory Service has an atomic `reserve`; nothing calls it. Calling it
+ *   means writing into another service's database, and the moment a later
+ *   step can fail, that write needs an undo — a compensating workflow, which
+ *   is a project of its own and is not in this milestone.
  *
- *   THE CART IS NOT EMPTIED. Place an order and the cart still has
- *   everything in it, so ordering twice creates two identical orders. The
- *   cart lives in another database, so emptying it cannot be part of the
- *   transaction above — that is the same problem again.
+ *   NO IDEMPOTENCY KEY. A double-clicked button can create two orders. The
+ *   window is small — the second click usually finds an empty cart once the
+ *   conversion event has landed — but it is real.
  *
- *   NO IDEMPOTENCY. A double-clicked button creates two orders. Nothing here
- *   can tell a retry from a new request.
- *
- *   NOTHING ELSE IS TOLD. No event is published, so no email, no analytics,
- *   no warehouse. Publishing after the commit can lose the message; before
- *   it can announce an order that never existed. That is what the outbox
- *   solves.
- *
- * Read those four again after this version works. Each one is a problem you
- * can now see rather than take on trust, which is the only reason to build
- * the naive version first.
+ *   THE PUBLISH IS NOT TRANSACTIONAL. See the note on `emit` below.
  */
 @Injectable()
 export class OrdersService {
@@ -67,6 +66,7 @@ export class OrdersService {
   constructor(
     private readonly orders: OrdersRepository,
     private readonly carts: CartClientService,
+    @Inject(EVENTS_CLIENT) private readonly events: ClientProxy,
   ) {}
 
   /**
@@ -107,6 +107,47 @@ export class OrdersService {
     this.logger.log(
       `order ${order.orderNumber}: ${order.items.length} line(s), ${order.total} ${order.currency}`,
     );
+
+    /**
+     * AFTER the commit, and it is worth being precise about what that costs.
+     *
+     * There is no transaction that spans PostgreSQL and RabbitMQ, so there
+     * are only two orders to do this in, and both are imperfect:
+     *
+     *   publish, then commit  the commit fails and the world has been told
+     *                         about an order that does not exist.
+     *   commit, then publish  the process dies in between and the order
+     *                         exists but nobody is ever told. (this one)
+     *
+     * We take the second, which is the same choice Auth, Product and
+     * Inventory already make. The failure it admits is a cart that stays
+     * full after a successful order — visible, harmless, and fixable by the
+     * customer. The other failure invents orders, which is not.
+     *
+     * The proper answer is a TRANSACTIONAL OUTBOX: write the event into the
+     * same transaction as the order, and let a separate relay publish it.
+     * That is a real piece of machinery, and it is deferred until a lost
+     * event actually costs something — an email that never arrives, a
+     * warehouse that never picks.
+     *
+     * `emit`, not `send`: this is an EVENT, a statement of fact about the
+     * past, addressed to nobody in particular. Nobody replies to it.
+     */
+    this.events.emit(EventPattern.OrderConfirmed, {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      userId,
+      // The cart id travels WITH the event — see the note on the payload.
+      cartId: cart.id,
+      total: order.total,
+      currency: order.currency,
+      lines: order.items.map((item) => ({
+        productId: item.productId,
+        sku: item.sku,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+    } satisfies OrderConfirmedPayload);
 
     return toDto(order);
   }
@@ -178,6 +219,17 @@ export class OrdersService {
     }
 
     this.logger.log(`order ${existing.orderNumber}: cancelled`);
+
+    // Published only AFTER a successful cancellation. `this.orders.cancel`
+    // returning false throws above, so an `order.cancelled` event for an
+    // order that is still confirmed can never leave — an event that is not a
+    // fact is worse than no event, because consumers act on it.
+    this.events.emit(EventPattern.OrderCancelled, {
+      orderId: existing.id,
+      orderNumber: existing.orderNumber,
+      userId,
+      reason,
+    } satisfies OrderCancelledPayload);
 
     const updated = await this.orders.findOne(userId, orderId);
     return toDto(updated ?? existing);

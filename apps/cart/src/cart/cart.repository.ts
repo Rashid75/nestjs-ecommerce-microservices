@@ -184,6 +184,36 @@ export class CartRepository {
   }
 
   /**
+   * ACTIVE → CONVERTED, for a cart that became an order.
+   *
+   * The lines are KEPT. The cart is not emptied and not deleted — it becomes
+   * the record of what the customer had in front of them when they checked
+   * out. `findOrCreateActive` gives them a fresh empty cart on their next
+   * visit, because the partial unique index only covers ACTIVE rows.
+   *
+   * IDEMPOTENT BY CONSTRUCTION, which is the whole reason it is written as a
+   * conditional UPDATE. RabbitMQ delivers at-least-once, so this WILL be
+   * called twice for the same cart eventually. `WHERE status = 'ACTIVE'`
+   * makes the second call a no-op instead of a mistake — no ledger of
+   * processed event ids required.
+   *
+   * That is the cheapest kind of idempotency and always the first to reach
+   * for: make the operation naturally repeatable. A processed-events table
+   * is what you need when the work genuinely cannot be repeated — sending an
+   * email, charging a card.
+   *
+   * Returns false when nothing was updated: already converted, or the
+   * customer has since started a new cart. Both are ordinary.
+   */
+  async markConverted(cartId: string): Promise<boolean> {
+    const [affected] = await this.carts.update(
+      { status: CartStatus.Converted },
+      { where: { id: cartId, status: CartStatus.Active } },
+    );
+    return affected > 0;
+  }
+
+  /**
    * Empties the cart but KEEPS it.
    *
    * Deleting the cart row would work and would be wrong: the row carries the

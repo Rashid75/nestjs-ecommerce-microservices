@@ -1,9 +1,10 @@
-import { CartDto, OrderStatus } from '@ecommerce/contracts';
+import { CartDto, EventPattern, OrderStatus } from '@ecommerce/contracts';
 import {
   BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import type { ClientProxy } from '@nestjs/microservices';
 import type { CartClientService } from '../cart/cart-client.service';
 import type { OrderRecord, OrdersRepository } from './orders.repository';
 import { OrdersService } from './orders.service';
@@ -17,6 +18,7 @@ import { OrdersService } from './orders.service';
  *   ✅ that an empty cart is refused before anything is written
  *   ✅ that a client-supplied price cannot reach the order
  *   ✅ which failure becomes which HTTP status
+ *   ✅ that an event is emitted only when the write actually succeeded
  *
  *   ❌ that the order and its lines are written atomically — that is
  *      PostgreSQL's guarantee, and a mocked repository has no transaction
@@ -98,12 +100,19 @@ function build(cart: CartDto = makeCart()) {
 
   const carts = { fetchActiveCart: jest.fn().mockResolvedValue(cart) };
 
+  // `emit` returns an Observable in real life. The service does not
+  // subscribe to it — an event is fire and forget — so a plain object is
+  // faithful enough here. What matters is WHICH pattern was emitted, with
+  // what payload, and WHETHER it was emitted at all.
+  const events = { emit: jest.fn().mockReturnValue({}) };
+
   const service = new OrdersService(
     repo as unknown as OrdersRepository,
     carts as unknown as CartClientService,
+    events as unknown as ClientProxy,
   );
 
-  return { service, repo, carts };
+  return { service, repo, carts, events };
 }
 
 describe('OrdersService.create', () => {
@@ -121,6 +130,19 @@ describe('OrdersService.create', () => {
     // answerable months later.
     expect(input.cartId).toBe(CART_ID);
     expect(input.userId).toBe(USER_ID);
+  });
+
+  it('announces the order, carrying the cart it came from', async () => {
+    const { service, events } = build();
+
+    await service.create(USER_ID);
+
+    expect(events.emit).toHaveBeenCalledTimes(1);
+    const [pattern, payload] = events.emit.mock.calls[0];
+    expect(pattern).toBe(EventPattern.OrderConfirmed);
+    // The consumer converts THIS cart, not "whatever is active on arrival".
+    expect(payload).toMatchObject({ orderId: ORDER_ID, cartId: CART_ID });
+    expect(payload.lines[0]).toMatchObject({ sku: 'SKU-1', quantity: 3 });
   });
 
   it('computes exact totals — 16.08 × 3 is 48.24, not 48.239999999999995', async () => {
@@ -153,7 +175,8 @@ describe('OrdersService.create', () => {
       BadRequestException,
     );
     // A validation failure before the first write is a clean rejection with
-    // nothing to clean up. That property is what step 2 has to work to keep.
+    // nothing to clean up — and nothing announced. An event for an order
+    // that was never created is a lie consumers would act on.
     expect(repo.create).not.toHaveBeenCalled();
   });
 
@@ -216,6 +239,17 @@ describe('OrdersService.cancel', () => {
     expect(allowedFrom).toEqual([OrderStatus.Confirmed]);
   });
 
+  it('announces the cancellation', async () => {
+    const { service, repo, events } = build();
+    repo.findOne.mockResolvedValue(makeOrderRecord());
+
+    await service.cancel(USER_ID, ORDER_ID, { reason: 'too slow' });
+
+    const [pattern, payload] = events.emit.mock.calls[0];
+    expect(pattern).toBe(EventPattern.OrderCancelled);
+    expect(payload).toMatchObject({ orderId: ORDER_ID, reason: 'too slow' });
+  });
+
   it('409s when the order was not in a cancellable state', async () => {
     const { service, repo } = build();
     repo.findOne.mockResolvedValue(
@@ -228,5 +262,18 @@ describe('OrdersService.cancel', () => {
     await expect(service.cancel(USER_ID, ORDER_ID, {})).rejects.toBeInstanceOf(
       ConflictException,
     );
+  });
+
+  it('says nothing when the cancellation did not happen', async () => {
+    const { service, repo, events } = build();
+    repo.findOne.mockResolvedValue(makeOrderRecord());
+    repo.cancel.mockResolvedValue(false);
+
+    await expect(service.cancel(USER_ID, ORDER_ID, {})).rejects.toThrow();
+
+    // THE ASSERTION THAT MATTERS. An `order.cancelled` event for an order
+    // that is still confirmed would have consumers undoing work that was
+    // never undone.
+    expect(events.emit).not.toHaveBeenCalled();
   });
 });

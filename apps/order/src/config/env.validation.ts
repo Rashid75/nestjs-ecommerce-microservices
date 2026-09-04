@@ -3,9 +3,10 @@ import * as Joi from 'joi';
 /**
  * Environment contract for the Order Service.
  *
- * ONE downstream dependency in step 1: the Cart Service, because an order is
- * built from a cart and the customer must not be able to name their own
- * lines or prices.
+ * TWO dependencies: the Cart Service, because an order is built from a cart and
+ * the customer must not be able to name their own lines or prices, and
+ * RabbitMQ, because the rest of the system has to hear that an order
+ * happened.
  *
  * Note what is NOT here, and why:
  *
@@ -14,11 +15,10 @@ import * as Joi from 'joi';
  *                          Re-pricing at checkout is exactly the surprise
  *                          snapshotting exists to prevent.
  *
- *   INVENTORY_SERVICE_URL  nothing reserves stock yet. This arrives in step
- *                          2 of this milestone, and it is the variable that
- *                          turns this service into a workflow coordinator.
- *
- *   RABBITMQ_URL           this service publishes nothing yet. Also step 2.
+ *   INVENTORY_SERVICE_URL  nothing reserves stock. Reserving is a write into
+ *                          another service's database, so it needs an undo
+ *                          when a later step fails — and that is a workflow
+ *                          this milestone deliberately does not build.
  */
 export interface OrderEnv {
   NODE_ENV: 'development' | 'test' | 'production';
@@ -34,6 +34,9 @@ export interface OrderEnv {
 
   CART_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
+
+  RABBITMQ_URL: string;
+  RABBITMQ_QUEUE: string;
 }
 
 export const orderEnvSchema = Joi.object({
@@ -61,4 +64,15 @@ export const orderEnvSchema = Joi.object({
     .min(100)
     .max(30_000)
     .default(5_000),
+
+  // Required at boot, but a broker that is DOWN does not stop this service
+  // starting or placing orders — NestJS's RMQ transport reconnects on its
+  // own, and a failed publish is logged. Checkout stays available; only the
+  // announcement is delayed.
+  RABBITMQ_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .required(),
+
+  // The queue every service publishes to and the Cart Service consumes from.
+  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
 });
