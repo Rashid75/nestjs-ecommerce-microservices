@@ -2,27 +2,49 @@
   "info": {
     "_postman_id": "0f2a8c40-7b91-4d3e-9c22-1a5e6d8f0001",
     "name": "E-Commerce Microservices",
-    "description": "Postman collection for the e-commerce microservices learning project.\n\n**Milestone 7 — Five services over HTTP and RabbitMQ, with Redis caching, rate limiting, gateway authentication and event-driven consumers.**\n\nFolders 1, 2 and 5 go through the PUBLIC API Gateway on :3000, which is how a real client talks to the system. Folder 3 calls the INTERNAL Auth Service on :3001 directly, purely so you can see the difference. Folder 4 requires you to stop a service on purpose.\n\nRun `1 · Happy path` top to bottom, or use the Collection Runner on the whole collection — every request has assertions, and folder 1 chains state (register saves the email, login saves the token) so it is re-runnable.\n\nSelect the `ecommerce · local` environment before running anything.",
+    "description": "A plain collection for driving the API by hand: one folder per resource, no assertions.\n\nRun the folders **top to bottom on a fresh start** — Auth saves a token, Catalogue saves a product id, and the later folders use them.\n\nSelect the `ecommerce · local` environment before running anything.\n\nThe assertion-heavy version, with the deliberately-failing requests and the cache and rate-limit checks, was removed on purpose while the order workflow is being built. It is in git history if it is wanted back.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Runs before every request in the collection.",
+          "const required = ['gatewayUrl', 'apiPrefix', 'password'];",
+          "const missing = required.filter((key) => !pm.environment.get(key));",
+          "if (missing.length > 0) {",
+          "  throw new Error(",
+          "    `Missing environment variable(s): ${missing.join(', ')}. ` +",
+          "    'Select the \"ecommerce · local\" environment in the top-right picker.'",
+          "  );",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "note",
+      "value": "All real values live in the environment, not here, so the collection can be shared without carrying anyone's tokens.",
+      "type": "string"
+    }
+  ],
   "item": [
     {
-      "name": "1 · Happy path (via API Gateway)",
-      "description": "The flow a real client performs. Each request stores what the next one needs, so run them in order.",
+      "name": "1 · Auth",
+      "description": "Register saves the token every other folder uses. Register generates a fresh email each run, so it can be re-run any number of times.",
       "item": [
         {
-          "name": "01 Register",
+          "name": "Register",
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Generate a unique email per run so this request can be executed",
-                  "// repeatedly without hitting the 409 from the unique index.",
-                  "// The '+tag' form is a real, deliverable address shape.",
-                  "const unique = `ada+${Date.now()}@example.com`;",
-                  "pm.environment.set('email', unique);"
+                  "pm.environment.set(`email`, `ada+${Date.now()}@example.com`);"
                 ]
               }
             },
@@ -31,38 +53,9 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('returns a user and a token', () => {",
-                  "  pm.expect(body).to.have.property('user');",
-                  "  pm.expect(body).to.have.property('tokens');",
-                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
-                  "  pm.expect(body.tokens.tokenType).to.eql('Bearer');",
-                  "});",
-                  "",
-                  "pm.test('token lifetime is short (<= 1 hour)', () => {",
-                  "  pm.expect(body.tokens.expiresIn).to.be.at.most(3600);",
-                  "});",
-                  "",
-                  "pm.test('role defaults to CUSTOMER', () => {",
-                  "  pm.expect(body.user.role).to.eql('CUSTOMER');",
-                  "});",
-                  "",
-                  "pm.test('the password hash never appears in the response', () => {",
-                  "  pm.expect(pm.response.text()).to.not.include('$2b$');",
-                  "  pm.expect(body.user).to.not.have.property('passwordHash');",
-                  "  pm.expect(body.user).to.not.have.property('password');",
-                  "});",
-                  "",
-                  "pm.test('email was normalised to lowercase', () => {",
-                  "  pm.expect(body.user.email).to.eql(body.user.email.toLowerCase());",
-                  "});",
-                  "",
-                  "// Hand state to the requests that follow.",
-                  "pm.environment.set('accessToken', body.tokens.accessToken);",
-                  "pm.environment.set('userId', body.user.id);"
+                  "const b = pm.response.json();",
+                  "pm.environment.set('accessToken', b.tokens.accessToken);",
+                  "pm.environment.set('userId', b.user.id);"
                 ]
               }
             }
@@ -86,462 +79,26 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "register"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "register"
+              ]
             },
-            "description": "Creates an account and returns an access token immediately, so the client does not need a second round trip to log in.\n\n**201, not 200** — a resource was created.\n\nThe `password` is validated by the gateway BEFORE the request is forwarded: minimum 12 characters, at least one lowercase, one uppercase and one digit, maximum 72 bytes (bcrypt's hard limit — anything beyond 72 bytes is silently ignored by bcrypt, so we reject rather than truncate a credential)."
+            "description": "A fresh email per run, so the unique index never turns this into a 409."
           }
         },
         {
-          "name": "02 Login",
+          "name": "Login",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 OK (login creates nothing, so not 201)', () =>",
-                  "  pm.response.to.have.status(200));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('returns a fresh access token', () => {",
-                  "  pm.expect(body.tokens.accessToken).to.be.a('string').and.not.empty;",
-                  "});",
-                  "",
-                  "pm.test('same user as registration', () => {",
-                  "  pm.expect(body.user.id).to.eql(pm.environment.get('userId'));",
-                  "});",
-                  "",
-                  "pm.test('no password hash in the response', () => {",
-                  "  pm.expect(pm.response.text()).to.not.include('$2b$');",
-                  "});",
-                  "",
-                  "pm.environment.set('accessToken', body.tokens.accessToken);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "login"]
-            },
-            "description": "Verifies a credential and issues a token. Returns **200**, not 201, because nothing was created.\n\nNotice this endpoint takes roughly a quarter of a second. That is bcrypt at cost 12 doing its job — deliberately slow hashing is what makes a stolen password table expensive to crack."
-          }
-        },
-        {
-          "name": "03 Me",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('returns the authenticated user', () => {",
-                  "  pm.expect(body.id).to.eql(pm.environment.get('userId'));",
-                  "  pm.expect(body.email).to.eql(pm.environment.get('email'));",
-                  "});",
-                  "",
-                  "pm.test('profile exposes only safe fields', () => {",
-                  "  pm.expect(Object.keys(body).sort()).to.eql(",
-                  "    ['createdAt', 'email', 'firstName', 'id', 'lastName', 'role']);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
-              }
-            ],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "me"]
-            },
-            "description": "The endpoint that proves the whole chain works.\n\nThe gateway does NOT open the token — it forwards the `Authorization` header untouched. The Auth Service verifies the signature and expiry, then re-reads the user from PostgreSQL, so a disabled or deleted account loses access on the very next request rather than when the token expires.\n\nThe response is a deliberately narrow projection. If a field is not in that list, no client can see it."
-          }
-        }
-      ]
-    },
-    {
-      "name": "2 · Validation & security (these SHOULD fail)",
-      "description": "Every request here is expected to be rejected. Read the assertions — the point is not that they fail, but exactly HOW they fail. Run folder 1 first: several of these reuse the email and token it stored.",
-      "item": [
-        {
-          "name": "04 Register — malformed body → 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
-                  "",
-                  "const messages = pm.response.json().message;",
-                  "",
-                  "pm.test('reports every problem at once, not just the first', () => {",
-                  "  pm.expect(messages).to.be.an('array');",
-                  "  pm.expect(messages.length).to.be.above(1);",
-                  "});",
-                  "",
-                  "pm.test('rejects the invalid email', () =>",
-                  "  pm.expect(messages.join(' ')).to.include('valid email'));",
-                  "",
-                  "pm.test('rejects the weak password', () =>",
-                  "  pm.expect(messages.join(' ')).to.include('12 characters'));",
-                  "",
-                  "pm.test('never echoes the submitted password back', () =>",
-                  "  pm.expect(pm.response.text()).to.not.include('short'));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"not-an-email\",\n  \"password\": \"short\",\n  \"firstName\": \"\",\n  \"lastName\": \"B\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "register"]
-            },
-            "description": "Rejected by the gateway's global `ValidationPipe` before any network hop to the Auth Service.\n\n`abortEarly: false` is why you get every error at once instead of one restart-and-retry per typo."
-          }
-        },
-        {
-          "name": "05 Register — privilege escalation attempt → 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
-                  "",
-                  "pm.test('the unknown property is named and refused', () => {",
-                  "  const messages = pm.response.json().message;",
-                  "  pm.expect(messages.join(' ')).to.include('property role should not exist');",
-                  "});",
-                  "",
-                  "pm.test('no account was created, so no token was issued', () => {",
-                  "  pm.expect(pm.response.text()).to.not.include('accessToken');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"attacker@example.com\",\n  \"password\": \"correct-horse-Battery9\",\n  \"firstName\": \"Mallory\",\n  \"lastName\": \"Attacker\",\n  \"role\": \"ADMIN\",\n  \"isActive\": true\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "register"]
-            },
-            "description": "**The most important negative test in this collection.**\n\nThis is a MASS ASSIGNMENT attack: send extra fields and hope the server copies the whole body onto the database row. Frameworks that do `User.create(req.body)` hand out admin accounts this way.\n\nTwo independent things stop it here:\n\n1. `whitelist: true` strips any property with no validation decorator on the DTO — `role` and `isActive` are removed before the controller sees them.\n2. `forbidNonWhitelisted: true` escalates from silent stripping to a loud 400, so the client learns immediately instead of wondering why their field was ignored.\n\nTry commenting out `forbidNonWhitelisted` in `apps/api-gateway/src/main.ts` and re-running: you will get a 201 with a CUSTOMER account. Stripped, but silently."
-          }
-        },
-        {
-          "name": "06 Register — duplicate email → 409",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
-                  "",
-                  "pm.test('explains the conflict without leaking anything else', () => {",
-                  "  pm.expect(pm.response.json().message).to.include('already exists');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"firstName\": \"{{firstName}}\",\n  \"lastName\": \"{{lastName}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "register"]
-            },
-            "description": "Re-registers the email that request 01 created. Run folder 1 first.\n\nThis 409 does NOT come from a 'does this email exist?' lookup — there is no such query. `UsersRepository` inserts, PostgreSQL's unique index rejects it, and the repository translates the constraint violation.\n\nWhy that matters: a check-then-insert is a race. Two simultaneous registrations both find nothing and both insert. Only the unique index is actually atomic.\n\nNote this response DOES confirm the address is registered — that is user enumeration, accepted deliberately here for shopper experience. For a health or finance product, make the opposite choice."
-          }
-        },
-        {
-          "name": "07 Login — wrong password → 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-                  "",
-                  "pm.test('generic message — does not say WHICH part was wrong', () => {",
-                  "  pm.expect(pm.response.json().message).to.eql('Invalid email or password');",
-                  "});",
-                  "",
-                  "// Stored so the next request can prove the two are identical.",
-                  "pm.environment.set('wrongPasswordMs', pm.response.responseTime);",
-                  "pm.environment.set('wrongPasswordBody', pm.response.text());"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"definitely-Wrong9999\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "login"]
-            },
-            "description": "A real account, the wrong password. Note the response time in the bottom bar — remember it for the next request."
-          }
-        },
-        {
-          "name": "08 Login — unknown email → 401 (enumeration check)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-                  "",
-                  "pm.test('byte-identical to the wrong-password response', () => {",
-                  "  const previous = pm.environment.get('wrongPasswordBody');",
-                  "  if (previous) {",
-                  "    pm.expect(pm.response.text()).to.eql(previous);",
-                  "  } else {",
-                  "    pm.expect.fail('Run request 07 first — it stores the body to compare against');",
-                  "  }",
-                  "});",
-                  "",
-                  "pm.test('timing is comparable, so response time reveals nothing', () => {",
-                  "  const previous = Number(pm.environment.get('wrongPasswordMs'));",
-                  "  const now = pm.response.responseTime;",
-                  "  console.log(`wrong password: ${previous}ms | unknown email: ${now}ms`);",
-                  "  // Both paths run a real bcrypt comparison, so neither should be",
-                  "  // an order of magnitude faster than the other.",
-                  "  pm.expect(now).to.be.above(previous / 10);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"nobody-here-at-all@example.com\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "login"]
-            },
-            "description": "An address that has no account at all.\n\nCompare this response — and its response time — with request 07. Same status, same body, similar duration.\n\nThat similarity is engineered. `AuthService.login()` runs a bcrypt comparison against a pre-computed dummy hash when no user is found, so the 'no such user' path costs the same as the 'wrong password' path. Without it, an unknown email would return in ~1ms while a known one takes ~250ms, and an attacker could harvest which addresses have accounts by timing alone — never guessing a single password.\n\nOpen the Postman Console (View → Show Postman Console) to see both timings printed side by side."
-          }
-        },
-        {
-          "name": "09 Me — no token → 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-                  "",
-                  "pm.test('no user data leaked', () => {",
-                  "  pm.expect(pm.response.text()).to.not.include('@');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "me"]
-            },
-            "description": "No `Authorization` header at all. The `JwtAuthGuard` on the Auth Service rejects the request before the handler runs."
-          }
-        },
-        {
-          "name": "10 Me — tampered token → 401",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Flip one character of the PAYLOAD segment, leaving the signature",
-                  "// untouched. The token still looks structurally valid; only the",
-                  "// signature check can tell that it was modified.",
-                  "const token = pm.environment.get('accessToken');",
-                  "if (!token) {",
-                  "  throw new Error('Run folder 1 first — no accessToken stored');",
-                  "}",
-                  "const [header, payload, signature] = token.split('.');",
-                  "const flipped = payload.slice(0, -1) + (payload.slice(-1) === 'A' ? 'B' : 'A');",
-                  "pm.variables.set('tamperedToken', `${header}.${flipped}.${signature}`);"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-                  "",
-                  "pm.test('the signature is what catches it', () => {",
-                  "  // A JWT is signed, not encrypted. Anyone can READ the claims;",
-                  "  // nobody without the key can CHANGE them and still verify.",
-                  "  pm.expect(pm.response.code).to.eql(401);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{tamperedToken}}"
-              }
-            ],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "me"]
-            },
-            "description": "Takes the real token stored by folder 1 and alters one character of its payload.\n\nThis demonstrates the single most misunderstood property of JWTs: they are **signed, not encrypted**. Paste your token into jwt.io and you can read every claim with no key whatsoever. What you cannot do without the key is change `role` to `ADMIN` and still produce a valid signature — which is exactly what this request tries."
-          }
-        }
-      ]
-    },
-    {
-      "name": "3 · Auth Service directly (internal :3001)",
-      "description": "The same endpoints, called on the internal service instead of through the gateway. Useful for seeing what the gateway adds — and for isolating whether a bug is in the gateway or in Auth.\n\nNote the URLs have NO `/api` prefix: `setGlobalPrefix` is configured on the gateway only.\n\nIn production these ports would not be reachable at all. The service binds to `127.0.0.1`, so this works from your machine and from nowhere else.",
-      "item": [
-        {
-          "name": "11 Login (direct, no /api prefix)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "pm.test('identical response shape to the gateway route', () => {",
-                  "  const body = pm.response.json();",
-                  "  pm.expect(body).to.have.property('user');",
-                  "  pm.expect(body).to.have.property('tokens');",
-                  "});",
-                  "",
                   "pm.environment.set('accessToken', pm.response.json().tokens.accessToken);"
                 ]
               }
@@ -565,30 +122,21 @@
               }
             },
             "url": {
-              "raw": "{{authUrl}}/auth/login",
-              "host": ["{{authUrl}}"],
-              "path": ["auth", "login"]
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "login"
+              ]
             },
-            "description": "Same response as the gateway route, one hop shorter. The Auth Service validates the body itself — it never trusts its caller, even though the gateway already validated."
+            "description": "200, not 201 — logging in creates nothing."
           }
         },
         {
-          "name": "12 Me (direct)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('same profile projection as via the gateway', () => {",
-                  "  pm.expect(Object.keys(pm.response.json()).sort()).to.eql(",
-                  "    ['createdAt', 'email', 'firstName', 'id', 'lastName', 'role']);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Me",
           "request": {
             "method": "GET",
             "header": [
@@ -598,84 +146,36 @@
               }
             ],
             "url": {
-              "raw": "{{authUrl}}/auth/me",
-              "host": ["{{authUrl}}"],
-              "path": ["auth", "me"]
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "me"
+              ]
             },
-            "description": "Proves the gateway is a pass-through for the `Authorization` header and adds nothing to the token itself."
+            "description": "The profile behind the current token."
           }
         }
       ]
     },
     {
-      "name": "4 · Downstream failure (stop the Auth Service first)",
-      "description": "These require you to deliberately break something. Stop the Auth Service — press Ctrl+C in its terminal, or run `npx nx reset` on that process — while leaving the gateway running.\n\nThe distinction being tested: the difference between 'the service answered, and the answer was an error' and 'the service did not answer at all'. Collapsing both to 500 is the common mistake, and it leaves clients unable to react to anything.",
+      "name": "2 · Catalogue",
+      "description": "Category → product → publish → read. The product created here is what the Inventory, Cart and Orders folders use.",
       "item": [
         {
-          "name": "13 Login while Auth Service is stopped → 503",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('503 Service Unavailable, not 500', () => {",
-                  "  pm.response.to.have.status(503);",
-                  "});",
-                  "",
-                  "pm.test('does not leak internal hostnames or ports', () => {",
-                  "  const text = pm.response.text();",
-                  "  pm.expect(text).to.not.include('127.0.0.1');",
-                  "  pm.expect(text).to.not.include('3001');",
-                  "  pm.expect(text).to.not.include('ECONNREFUSED');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "login"]
-            },
-            "description": "With Auth stopped, axios fails with `ECONNREFUSED`. `AuthProxyService.forward()` maps that to **503 Service Unavailable** — an honest statement that a dependency is down, and a signal a client can retry on.\n\nThe raw axios error, which names our internal host and port, goes to the gateway's log and never to the client.\n\nThe other two mappings, for comparison:\n- `ECONNABORTED` / `ETIMEDOUT` → **504 Gateway Timeout** (set `HTTP_CLIENT_TIMEOUT_MS=1` in `.env` and restart the gateway to provoke it)\n- anything else unanswered → **502 Bad Gateway**\n\nWhen Auth DOES answer — a 401 or a 409 — that status is passed straight through unchanged. A 409 from Auth must reach the client as a 409."
-          }
-        }
-      ]
-    },
-    {
-      "name": "5 · Catalogue (products & categories)",
-      "description": "The Milestone 3 catalogue API, through the gateway.\n\nRun top to bottom — 14 creates the category that 16 puts a product in, and later requests reuse both ids. The negative cases at the end are the interesting ones: they demonstrate the ORDER BY allow-list, the SKU unique index, the foreign key, and why soft-deleting a category needs an application-level check.\n\n⚠️ These endpoints are currently UNAUTHENTICATED. That is a known gap tracked in docs/PROJECT-PLAN.md, not an oversight — closing it needs the RS256 decision. Do not expose this stack beyond localhost.",
-      "item": [
-        {
-          "name": "14 Create category",
+          "name": "Create category",
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Unique per run: the slug and name both have live-unique indexes.",
                   "const stamp = Date.now().toString().slice(-8);",
-                  "pm.environment.set('categorySlug', `laptops-${stamp}`);",
-                  "pm.environment.set('categoryName', `Laptops ${stamp}`);"
+                  "pm.environment.set(`categorySlug`, `laptops-${stamp}`);",
+                  "pm.environment.set(`categoryName`, `Laptops ${stamp}`);"
                 ]
               }
             },
@@ -684,19 +184,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('slug was normalised to lowercase', () => {",
-                  "  pm.expect(body.slug).to.eql(body.slug.toLowerCase());",
-                  "});",
-                  "",
-                  "pm.test('new categories are active', () => {",
-                  "  pm.expect(body.isActive).to.eql(true);",
-                  "});",
-                  "",
-                  "pm.environment.set('categoryId', body.id);"
+                  "pm.environment.set('categoryId', pm.response.json().id);"
                 ]
               }
             }
@@ -707,6 +195,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -720,47 +212,41 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "categories"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "categories"
+              ]
             },
-            "description": "The slug is the URL-safe identifier. Its alphabet is deliberately narrow — lowercase letters, digits and single hyphens — because it ends up in a public path segment.\n\nUniqueness is enforced by a PARTIAL unique index (`WHERE deleted_at IS NULL`), so a soft-deleted category does not reserve its slug forever."
+            "description": "Slug and name are both uniquely indexed, so both are generated per run."
           }
         },
         {
-          "name": "15 List categories",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "pm.test('returns a bare array — categories are not paginated', () => {",
-                  "  pm.expect(pm.response.json()).to.be.an('array');",
-                  "});",
-                  "",
-                  "pm.test('includes the category just created', () => {",
-                  "  const ids = pm.response.json().map((c) => c.id);",
-                  "  pm.expect(ids).to.include(pm.environment.get('categoryId'));",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "List categories",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "categories"]
-            },
-            "description": "Unpaginated on purpose: categories are a small, bounded set and a navigation menu wants all of them at once.\n\nThat decision has a trigger for revisiting — hundreds of categories, or nesting — recorded in docs/PROJECT-PLAN.md. Contrast with `/products`, which is paginated because a catalogue is not bounded."
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "categories"
+              ]
+            }
           }
         },
         {
-          "name": "16 Create product",
+          "name": "Create product",
           "event": [
             {
               "listen": "prerequest",
@@ -768,7 +254,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "const stamp = Date.now().toString().slice(-8);",
-                  "pm.environment.set('productSku', `LAP-X1C-${stamp}`);"
+                  "pm.environment.set(`productSku`, `LAP-X1C-${stamp}`);"
                 ]
               }
             },
@@ -777,28 +263,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('price is a STRING, not a number', () => {",
-                  "  // DECIMAL(12,2) in Postgres. A JSON number is an IEEE-754 double",
-                  "  // and cannot hold 19.99 exactly, so money crosses the wire as an",
-                  "  // exact decimal string.",
-                  "  pm.expect(body.price).to.be.a('string');",
-                  "  pm.expect(body.price).to.eql('1899.00');",
-                  "});",
-                  "",
-                  "pm.test('SKU was normalised to uppercase', () => {",
-                  "  pm.expect(body.sku).to.eql(body.sku.toUpperCase());",
-                  "});",
-                  "",
-                  "pm.test('status defaults to DRAFT, not ACTIVE', () => {",
-                  "  // Nothing goes on sale by accident.",
-                  "  pm.expect(body.status).to.eql('DRAFT');",
-                  "});",
-                  "",
-                  "pm.environment.set('productId', body.id);"
+                  "pm.environment.set('productId', pm.response.json().id);"
                 ]
               }
             }
@@ -809,6 +274,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -822,121 +291,118 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products"
+              ]
             },
-            "description": "Note `price` goes IN as a JSON number and comes OUT as a string. The service converts with `toFixed(2)` before the value ever reaches the driver, so it never round-trips through a float on its way into the database.\n\n`status` is omitted, so it defaults to DRAFT. A default of ACTIVE would mean a half-finished import is immediately purchasable."
+            "description": "Note the response: `price` comes back as the string \"1899.00\", and `status` is DRAFT. Nothing goes on sale by accident."
           }
         },
         {
-          "name": "17 Get product by id",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('the category is JOINed in, not a second request', () => {",
-                  "  pm.expect(body.category).to.be.an('object');",
-                  "  pm.expect(body.category.id).to.eql(pm.environment.get('categoryId'));",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Publish the product (DRAFT → ACTIVE)",
           "request": {
-            "method": "GET",
-            "header": [],
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
             },
-            "description": "The embedded `category` comes from `include: [Category]` — one SQL JOIN.\n\nWithout it, reading `product.category` would issue a second query per product. Over a 20-item list that is the N+1 QUERY PROBLEM: 1 + 20 round trips instead of 1."
+            "description": "Required before the Cart folder: a DRAFT product cannot be added to a cart."
           }
         },
         {
-          "name": "18 List products (default page)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('response is enveloped, not a bare array', () => {",
-                  "  pm.expect(body).to.have.property('items');",
-                  "  pm.expect(body).to.have.property('meta');",
-                  "});",
-                  "",
-                  "pm.test('meta carries everything a pager needs', () => {",
-                  "  pm.expect(Object.keys(body.meta).sort()).to.eql(",
-                  "    ['hasNext', 'hasPrevious', 'limit', 'page', 'total', 'totalPages']);",
-                  "});",
-                  "",
-                  "pm.test('defaults are page 1, limit 20', () => {",
-                  "  pm.expect(body.meta.page).to.eql(1);",
-                  "  pm.expect(body.meta.limit).to.eql(20);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Get product by id",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"]
-            },
-            "description": "Returning a bare array is the common shortcut and it is a mistake: the client cannot tell whether more data exists, so it guesses from `length === limit`. Adding the envelope later is a breaking change for every consumer."
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
+            }
           }
         },
         {
-          "name": "19 List products (filter + sort + paginate)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('every result is in the requested category', () => {",
-                  "  body.items.forEach((p) =>",
-                  "    pm.expect(p.categoryId).to.eql(pm.environment.get('categoryId')));",
-                  "});",
-                  "",
-                  "pm.test('results are sorted by price ascending', () => {",
-                  "  const prices = body.items.map((p) => Number(p.price));",
-                  "  const sorted = [...prices].sort((a, b) => a - b);",
-                  "  pm.expect(prices).to.eql(sorted);",
-                  "});",
-                  "",
-                  "pm.test('limit is respected', () => {",
-                  "  pm.expect(body.items.length).to.be.at.most(5);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "List products",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List products — filter, sort, paginate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products"
+              ],
               "query": [
                 {
                   "key": "categoryId",
@@ -963,204 +429,21 @@
                   "value": "5"
                 }
               ]
-            },
-            "description": "Everything combines: category filter, price floor, sort field, sort direction, page and limit.\n\nThe composite index `(status, created_at DESC)` serves the default listing. This query sorts by price, which is why `products_price_idx` exists too. Each index in the migration is justified against a specific query — an index costs write throughput on every INSERT and UPDATE, so \"index everything\" is as wrong as \"index nothing\"."
+            }
           }
         },
         {
-          "name": "20 List products — invalid sortBy → 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
-                  "",
-                  "pm.test('the allow-list rejected the value', () => {",
-                  "  const messages = pm.response.json().message;",
-                  "  pm.expect(messages.join(' ')).to.include('sortBy');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"],
-              "query": [
-                {
-                  "key": "sortBy",
-                  "value": "password; DROP TABLE products;--"
-                }
-              ]
-            },
-            "description": "**The most important negative test in this folder.**\n\n`ORDER BY` is the one part of a SQL statement that CANNOT be parameterised — there is no `ORDER BY $1`. So whatever a client sends as `sortBy` would be concatenated into the statement by a naive implementation:\n\n```js\norder: [[req.query.sortBy, \"ASC\"]]   // ← hands the caller your SQL\n```\n\nThe defence is an enum allow-list: `sortBy` may only be `name`, `price`, `createdAt` or `updatedAt`, checked by class-validator before the service ever runs. Anything else is a 400.\n\nEvery other value in this query — search terms, price bounds, ids — travels as a BIND PARAMETER, which is why they need no such treatment."
-          }
-        },
-        {
-          "name": "21 List products — inverted price range → 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
-                  "",
-                  "pm.test('says what is wrong rather than returning nothing', () => {",
-                  "  pm.expect(JSON.stringify(pm.response.json())).to.include('minPrice');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"],
-              "query": [
-                {
-                  "key": "minPrice",
-                  "value": "500"
-                },
-                {
-                  "key": "maxPrice",
-                  "value": "100"
-                }
-              ]
-            },
-            "description": "Both values are individually valid, so no DTO decorator can catch this — the rule is about the RELATIONSHIP between two fields, which is a service-layer concern.\n\nWithout the check the query is legal and returns an empty page, and the client reads \"no results\" instead of \"you made a mistake\"."
-          }
-        },
-        {
-          "name": "22 Create product — duplicate SKU → 409",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
-                  "",
-                  "pm.test('names the field that collided', () => {",
-                  "  pm.expect(pm.response.json().message).to.include('sku');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Duplicate SKU attempt\",\n  \"sku\": \"{{productSku}}\",\n  \"price\": 999.99,\n  \"categoryId\": \"{{categoryId}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"]
-            },
-            "description": "Reuses the SKU request 16 created. Run this folder in order.\n\nThe 409 does NOT come from a \"does this SKU exist?\" lookup — there is no such query. The repository inserts, the partial unique index rejects it, and the error is translated.\n\nWhy that matters: check-then-insert is a race. Two concurrent creates both find nothing and both insert. Only the index is atomic."
-          }
-        },
-        {
-          "name": "23 Create product — unknown categoryId → 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('400 Bad Request, not 404', () => {",
-                  "  // The ROUTE resolved fine. The bad value was in the body, so this",
-                  "  // is a malformed request, not a missing resource.",
-                  "  pm.response.to.have.status(400);",
-                  "});",
-                  "",
-                  "pm.test('names categoryId', () => {",
-                  "  pm.expect(JSON.stringify(pm.response.json())).to.include('categoryId');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Orphan product\",\n  \"sku\": \"ORPHAN-0001\",\n  \"price\": 10,\n  \"categoryId\": \"00000000-0000-4000-8000-000000000000\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"]
-            },
-            "description": "A well-formed UUID that references nothing.\n\nThe FOREIGN KEY catches it — again, no pre-check SELECT. `ON DELETE RESTRICT` on that same key is what stops a category being hard-deleted while products point at it."
-          }
-        },
-        {
-          "name": "24 Patch product price only",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "const body = pm.response.json();",
-                  "",
-                  "pm.test('the price changed', () => {",
-                  "  pm.expect(body.price).to.eql('1599.50');",
-                  "});",
-                  "",
-                  "pm.test('NOTHING ELSE was wiped', () => {",
-                  "  // The regression this guards: spreading the DTO would include",
-                  "  // `name: undefined` and write NULL over a NOT NULL column.",
-                  "  pm.expect(body.name).to.eql('ThinkPad X1 Carbon');",
-                  "  pm.expect(body.description).to.eql('14-inch business laptop');",
-                  "  pm.expect(body.sku).to.eql(pm.environment.get('productSku'));",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Update the price",
           "request": {
             "method": "PATCH",
             "header": [
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1174,468 +457,33 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "PATCH, not PUT — and the difference is not stylistic.\n\nPUT REPLACES a resource: fields you omit are cleared. Sending `{ \"price\": 1599.5 }` as a PUT would wipe the name and description. PATCH means \"change exactly what I sent\", which is what an admin price-edit form actually wants.\n\nThe service builds its update object key by key rather than spreading the DTO, because class-transformer materialises every optional property as `undefined` — and `{ name: undefined }` reaching Sequelize is a request to write NULL."
-          }
-        },
-        {
-          "name": "25 Delete category that still has products → 409",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
-                  "",
-                  "pm.test('says how many products are blocking it', () => {",
-                  "  pm.expect(pm.response.json().message).to.match(/product/i);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories/{{categoryId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "categories", "{{categoryId}}"]
-            },
-            "description": "The subtle one.\n\n`products.category_id` declares `ON DELETE RESTRICT`, so PostgreSQL would refuse a hard delete. But this is a SOFT delete — an UPDATE setting `deleted_at` — and no row is being removed, so no foreign key is violated. The database would happily let the category vanish from listings while its products still referenced it.\n\nSo CategoriesService counts products first and refuses. That is the general shape of the trade-off: soft deletes buy recoverable history and cost you the database's referential guarantees, which you then re-implement in the application."
-          }
-        },
-        {
-          "name": "26 Delete product",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('204 No Content', () => pm.response.to.have.status(204));",
-                  "",
-                  "pm.test('empty body — the status already said it', () => {",
-                  "  pm.expect(pm.response.text()).to.eql('');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "A SOFT delete: `deleted_at` is set, the row stays. Order history, invoices and analytics will reference this product long after it stops being sold, and a hard delete would orphan all of it.\n\nWorth saying plainly: setting `status` to ARCHIVED is usually what people actually want. Archiving keeps the item visible in admin views and reports; deleting hides it everywhere.\n\n204 with an empty body, not 200 with `{ \"deleted\": true }`. The status code already said what happened."
-          }
-        },
-        {
-          "name": "27 Get the deleted product → 404",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
-                  "",
-                  "pm.test('soft-deleted rows are invisible to normal reads', () => {",
-                  "  // `paranoid: true` adds `WHERE deleted_at IS NULL` to every SELECT.",
-                  "  // The row is still in the table — try it in psql.",
-                  "  pm.expect(pm.response.code).to.eql(404);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "Proof that the soft delete works from the API side.\n\nTo see the other half, query the table directly:\n\n```sql\nSELECT sku, deleted_at FROM products WHERE deleted_at IS NOT NULL;\n```\n\nThe row is there. `paranoid: true` is what makes Sequelize filter it out — and note that raw SQL will NOT, which is exactly why the unique index on `sku` is partial."
-          }
-        }
-      ]
-    },
-    {
-      "name": "6 · Cache & rate limiting",
-      "description": "Milestone 4. Requires Redis running on localhost:6379 — start it with:\n\n```\ndocker run -d --name ecommerce-redis -p 6379:6379 redis:7-alpine\n```\n\n**Run folder 5 first.** These requests reuse the product it created.\n\nThe cache is made visible through the `X-Cache: HIT | MISS` response header — the same convention a CDN uses. Without it a cache is unverifiable from outside: you cannot tell a hit from a miss, and you cannot prove invalidation worked.\n\nRun 28 → 32 in order. The sequence tells one story: cold read, warm read, write, and the invalidation that makes the next read cold again.",
-      "item": [
-        {
-          "name": "28 Product detail — cold read (MISS)",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Ensure a cold start regardless of what ran before: PATCHing the",
-                  "// product bumps its cache key out of Redis. Using the API rather",
-                  "// than FLUSHDB keeps this runnable against any environment.",
-                  "const url = `${pm.environment.get('gatewayUrl')}/${pm.environment.get('apiPrefix')}/products/${pm.environment.get('productId')}`;",
-                  "pm.sendRequest({",
-                  "  url, method: 'PATCH',",
-                  "  header: { 'Content-Type': 'application/json' },",
-                  "  body: { mode: 'raw', raw: JSON.stringify({ status: 'ACTIVE' }) },",
-                  "}, () => {});"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "pm.test('X-Cache: MISS — this read reached PostgreSQL', () => {",
-                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
-                  "});",
-                  "",
-                  "pm.environment.set('coldReadMs', pm.response.responseTime);",
-                  "console.log(`cold read (MISS): ${pm.response.responseTime}ms`);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "The first read after a write. Redis has no entry, so the Product Service queries PostgreSQL, stores the result with a TTL, and reports `X-Cache: MISS`.\n\nThe header travels two hops: the Product Service sets it, and the gateway relays it — through a deliberate ALLOW-LIST of exactly one header name. Forwarding every upstream header would leak internal `Server` strings and cookies, which is precisely the detail a gateway exists to hide.\n\nNote the response time. Compare it with the next request."
-          }
-        },
-        {
-          "name": "29 Product detail — warm read (HIT)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "pm.test('X-Cache: HIT — served from Redis', () => {",
-                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
-                  "});",
-                  "",
-                  "const cold = Number(pm.environment.get('coldReadMs'));",
-                  "console.log(`warm read (HIT): ${pm.response.responseTime}ms vs cold ${cold}ms`);",
-                  "",
-                  "pm.test('the response is byte-identical to the cold read', () => {",
-                  "  // A cache that returns something SUBTLY different is far worse",
-                  "  // than no cache: the bug only appears on the warm path and is",
-                  "  // invisible in local development where the cache is often cold.",
-                  "  pm.expect(pm.response.json().id).to.eql(pm.environment.get('productId'));",
-                  "  pm.expect(pm.response.json().price).to.be.a('string');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "Same URL, moments later. Redis answers, PostgreSQL is never touched.\n\n**Do not expect a dramatic speed-up on localhost.** PostgreSQL serves an indexed primary-key lookup in about a millisecond, and Redis has to cross a network socket too — the two are close, and the cached one can even measure slower.\n\nThat is not a failure of the cache; it is a correction to why caches exist. The win is not per-request latency. It is that 10,000 requests for this product cost the database ZERO queries instead of 10,000 — protecting a finite connection pool during a spike. Caching is about capacity, not speed.\n\nOpen the Postman Console (`Ctrl+Alt+C`) to see both timings printed."
-          }
-        },
-        {
-          "name": "30 Update the price (invalidates the cache)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('the new price is returned', () => {",
-                  "  pm.expect(pm.response.json().price).to.eql('1234.56');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"price\": 1234.56\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "A write. Two invalidations happen after the database commit:\n\n1. **`DEL detail:{id}`** — we know exactly which key is wrong.\n2. **`INCR listgen`** — we have NO idea which cached list pages contained this product, and the query space is unbounded (`?search=x&minPrice=5&sortBy=price&page=7`). So every list key embeds a generation number, and incrementing it makes all of them unreachable at once, in O(1).\n\nThe alternative — `KEYS products:list:*` then DEL — must never be used in production. Redis is single-threaded and `KEYS` walks the entire keyspace while blocking every other client.\n\nTwo ordering rules worth memorising:\n\n- **Write first, invalidate second.** Invalidating first opens a window where a concurrent read repopulates the cache from the OLD row, and that stale value then survives a full TTL.\n- **Invalidate, do not update.** Writing the new value into the cache here looks like an optimisation; it means two concurrent updates can reach the cache in the opposite order to the database, leaving the cache permanently showing the older price."
-          }
-        },
-        {
-          "name": "31 Product detail — cold again, and correct",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "pm.test('X-Cache: MISS — invalidation worked', () => {",
-                  "  // If this says HIT, the write did not invalidate and the API is",
-                  "  // now serving a stale price. That is the failure mode this whole",
-                  "  // milestone exists to prevent.",
-                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
-                  "});",
-                  "",
-                  "pm.test('the price is the NEW one', () => {",
-                  "  pm.expect(pm.response.json().price).to.eql('1234.56');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
-            },
-            "description": "The proof. A MISS here means the write really did evict the key; a HIT would mean the client is being served a stale price.\n\nThis pair — 30 then 31 — is the single most important check in this folder. A cache with broken invalidation does not fail loudly; it quietly serves yesterday's prices, and nobody notices until a customer is charged the wrong amount."
-          }
-        },
-        {
-          "name": "32 List products — MISS then HIT",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Fire the same query once so the second (measured) call is warm.",
-                  "const base = `${pm.environment.get('gatewayUrl')}/${pm.environment.get('apiPrefix')}/products?page=1&limit=5&sortBy=createdAt&sortOrder=desc`;",
-                  "pm.environment.set('listWarmupUrl', base);",
-                  "pm.sendRequest(base, (err, res) => {",
-                  "  if (!err) console.log(`list warm-up: X-Cache=${res.headers.get('X-Cache')}`);",
-                  "});"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "pm.test('X-Cache: HIT — the identical query was already cached', () => {",
-                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
-                  "});",
-                  "",
-                  "pm.test('still a properly enveloped page', () => {",
-                  "  pm.expect(pm.response.json()).to.have.property('items');",
-                  "  pm.expect(pm.response.json()).to.have.property('meta');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products?page=1&limit=5&sortBy=createdAt&sortOrder=desc",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"],
-              "query": [
-                {
-                  "key": "page",
-                  "value": "1"
-                },
-                {
-                  "key": "limit",
-                  "value": "5"
-                },
-                {
-                  "key": "sortBy",
-                  "value": "createdAt"
-                },
-                {
-                  "key": "sortOrder",
-                  "value": "desc"
-                }
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
               ]
             },
-            "description": "List pages are cached too, keyed by a hash of every parameter that changes the result.\n\nTwo properties the key must have, and both are easy to get wrong:\n\n- **Stable** — `?limit=5&page=1` and `?page=1&limit=5` are the same query and must produce the same key. Serialising the DTO directly depends on property order and would halve the hit rate for no reason.\n- **Total** — every parameter affecting the result must be in the key. Miss one (say `status`) and a filtered request gets served the unfiltered page. That is not a slow response; it is a wrong one.\n\nChange any query parameter below and the next call is a MISS again — that is the key doing its job, not a bug.\n\nList TTL is 60 seconds, five times shorter than a product detail: a page reflects many rows, so any one of them changing makes it stale."
-          }
-        },
-        {
-          "name": "33 Rate limit — six logins, expect 429",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// /api/auth/login is limited to 5 per minute per IP. Fire five",
-                  "// attempts here so the request below is the sixth and is refused.",
-                  "const url = `${pm.environment.get('gatewayUrl')}/${pm.environment.get('apiPrefix')}/auth/login`;",
-                  "const body = {",
-                  "  mode: 'raw',",
-                  "  raw: JSON.stringify({ email: 'nobody@example.com', password: 'not-the-Password1' }),",
-                  "};",
-                  "",
-                  "let done = 0;",
-                  "for (let i = 0; i < 5; i += 1) {",
-                  "  pm.sendRequest(",
-                  "    { url, method: 'POST', header: { 'Content-Type': 'application/json' }, body },",
-                  "    (err, res) => {",
-                  "      done += 1;",
-                  "      if (!err) console.log(`warm-up ${done}: ${res.code} remaining=${res.headers.get('X-RateLimit-Remaining')}`);",
-                  "    },",
-                  "  );",
-                  "}"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('429 Too Many Requests', () => {",
-                  "  pm.response.to.have.status(429);",
-                  "});",
-                  "",
-                  "pm.test('tells the client when to come back', () => {",
-                  "  // Without Retry-After a client retries immediately, gets another",
-                  "  // 429, and the retry storm makes the overload worse.",
-                  "  pm.expect(pm.response.headers.get('Retry-After')).to.exist;",
-                  "  pm.expect(Number(pm.response.headers.get('Retry-After'))).to.be.above(0);",
-                  "});",
-                  "",
-                  "pm.test('exposes the budget', () => {",
-                  "  pm.expect(pm.response.headers.get('X-RateLimit-Limit')).to.eql('5');",
-                  "  pm.expect(pm.response.headers.get('X-RateLimit-Remaining')).to.eql('0');",
-                  "});",
-                  "",
-                  "console.log(`retry after ${pm.response.headers.get('Retry-After')}s`);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"nobody@example.com\",\n  \"password\": \"not-the-Password1\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "login"]
-            },
-            "description": "**The most important control added in this milestone.**\n\nUntil now the only thing slowing a credential-stuffing attack was bcrypt — roughly 250ms per guess, so about 4 guesses per second per connection, and nothing stopped an attacker opening a thousand connections. Against a leaked email/password list that is entirely sufficient to succeed.\n\n5 attempts per IP per minute makes online guessing useless while staying invisible to a human who mistypes twice.\n\nThe counter lives in Redis, not in process memory. That matters: three gateway replicas with in-memory counters would each allow 5, so the real limit would be 15 — and it would reset on every deploy. A limit that depends on how many processes you happen to be running is not a limit.\n\nThe increment uses a **Lua script**, not `INCR` followed by `EXPIRE`. Between those two commands is a real window: a process that dies there leaves a key with no TTL, and that client is locked out permanently with nothing in the logs to explain it. Redis runs a script atomically.\n\n**What this does NOT solve:** an attacker with a botnet gets 5 attempts per IP, and a distributed attack has many IPs. The next layers are per-account lockout, breached-credential checks and MFA. Rate limiting raises the cost; it does not close the door.\n\nWait 60 seconds and the window resets."
-          }
-        },
-        {
-          "name": "34 Rate limit headers on a normal request",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK — well inside the budget', () => {",
-                  "  pm.response.to.have.status(200);",
-                  "});",
-                  "",
-                  "pm.test('every response carries the budget', () => {",
-                  "  pm.expect(pm.response.headers.get('X-RateLimit-Limit')).to.exist;",
-                  "  pm.expect(pm.response.headers.get('X-RateLimit-Remaining')).to.exist;",
-                  "  pm.expect(pm.response.headers.get('X-RateLimit-Reset')).to.exist;",
-                  "});",
-                  "",
-                  "console.log(`limit=${pm.response.headers.get('X-RateLimit-Limit')} remaining=${pm.response.headers.get('X-RateLimit-Remaining')} resetIn=${pm.response.headers.get('X-RateLimit-Reset')}s`);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "categories"]
-            },
-            "description": "Rate limiting is applied by a GLOBAL guard, so every route has a budget by default — 100 per minute unless a route declares otherwise with `@RateLimit()`.\n\nGlobal, not per-controller, and the direction matters. A guard applied route by route fails OPEN when someone forgets it: the new endpoint is simply unlimited and nothing tells you. Applied globally it fails CLOSED — a new endpoint inherits the default, and anything needing an exception has to say so out loud.\n\nThe three headers let a well-behaved client pace itself instead of discovering the limit by hitting it. GitHub, Stripe and Twitter all publish exactly this trio."
+            "description": "A partial update: send only what changes. With RabbitMQ running this also publishes `product.price_changed`."
           }
         }
       ]
     },
     {
-      "name": "7 · Inventory & concurrency",
-      "description": "**Run folder 5 first** — these reuse the product it created.\n\nThe story: register stock, receive goods, reserve them for an order, watch the invariants refuse the impossible, then ship.\n\nThree numbers, and only one is interesting:\n\n- `onHand` — physically in the warehouse\n- `reserved` — promised to pending orders, still physically present\n- `available` — `onHand − reserved`, **derived, never stored**\n\nA stored third column can drift out of agreement with the other two, and when it does you cannot tell which is wrong. Deriving it makes the invariant structural.\n\n**The concurrency proof is not here.** A race needs real simultaneous connections, which Postman cannot produce. Run `npm run demo:oversell` — see request 45.",
+      "name": "3 · Inventory",
+      "description": "Stock is three numbers: `onHand`, `reserved`, and `available` — which is derived, never stored. Run this after the Catalogue folder.",
       "item": [
         {
-          "name": "35 Register the product with inventory",
+          "name": "Register the product with inventory",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "const b = pm.response.json();",
-                  "pm.test('opens at zero — nothing arrives by magic', () => {",
-                  "  pm.expect(b.onHand).to.eql(0);",
-                  "  pm.expect(b.reserved).to.eql(0);",
-                  "  pm.expect(b.available).to.eql(0);",
-                  "});",
-                  "pm.environment.set('inventoryId', b.id);"
+                  "pm.environment.set('inventoryId', pm.response.json().id);"
                 ]
               }
             }
@@ -1646,6 +494,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1659,34 +511,29 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory"
+              ]
             },
-            "description": "Creates the stock row for a product that already exists in the catalogue.\n\nNote there is **no foreign key** to `products`. That table lives in `ecommerce_product_db`; this one lives in `ecommerce_inventory_db`, and PostgreSQL cannot enforce referential integrity across databases.\n\nThat is not a limitation being worked around — it is the point of database-per-service. What we give up: the database can no longer guarantee this `productId` is real. What we get: the Product Service can be changed, split or rewritten without a lock in its database ever blocking a write in ours.\n\nConsistency becomes **eventual** and the application's job: validate where cheap, reconcile periodically, and react to `ProductDeleted` events once RabbitMQ exists.\n\n`sku` is deliberately **denormalised** — copied so a warehouse operator reading this table at 3am does not need a second service to be reachable to know what a row refers to. It is a label, never read to make a decision."
+            "description": "Opens at zero. Nothing arrives by magic."
           }
         },
         {
-          "name": "36 Receive 10 units",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "pm.test('on-hand rose to 10', () => pm.expect(b.onHand).to.eql(10));",
-                  "pm.test('all of it is available', () => pm.expect(b.available).to.eql(10));"
-                ]
-              }
-            }
-          ],
+          "name": "Receive 10 units",
           "request": {
             "method": "POST",
             "header": [
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1700,43 +547,31 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/receive",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "receive"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "receive"
+              ]
             },
-            "description": "Goods arrived. The only operation that can never fail on availability — receiving only ever adds.\n\n`quantity` is always **positive**; the operation decides the direction. Allowing a negative here would let `receive` secretly become a write-off and bypass every availability guard below it.\n\nThe `reference` lands in the ledger. Six months later, \"where did these ten units come from?\" is answerable."
+            "description": "Goods arrived: `onHand` goes up."
           }
         },
         {
-          "name": "37 Reserve 3 for an order",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "",
-                  "pm.test('reserved rose to 3', () => pm.expect(b.reserved).to.eql(3));",
-                  "",
-                  "pm.test('on-hand is UNCHANGED at 10', () => {",
-                  "  // The units are promised, not gone. They are still physically on",
-                  "  // the shelf, and decrementing here would make the system disagree",
-                  "  // with the warehouse. Only fulfilment reduces on-hand.",
-                  "  pm.expect(b.onHand).to.eql(10);",
-                  "});",
-                  "",
-                  "pm.test('available fell to 7', () => pm.expect(b.available).to.eql(7));"
-                ]
-              }
-            }
-          ],
+          "name": "Reserve 3",
           "request": {
             "method": "POST",
             "header": [
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1750,86 +585,31 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/reserve",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "reserve"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "reserve"
+              ]
             },
-            "description": "**The operation the whole service exists to protect.**\n\nUnder the hood this is ONE statement:\n\n```sql\nUPDATE inventory_items\n   SET quantity_reserved = quantity_reserved + :n\n WHERE product_id = :id\n   AND (quantity_on_hand - quantity_reserved) >= :n\nRETURNING ...\n```\n\nThe availability check lives in the `WHERE` clause, so there is no gap between deciding and acting for another transaction to slip into. Either one row matches or zero do, and zero is a definitive answer rather than a guess.\n\nThe naive version — `SELECT` the quantity, check it in JavaScript, then `UPDATE` — is a check-then-act race. Two customers both read \"1 available\", both pass the check, and both are told yes. **Wrapping those three steps in a transaction does not fix it**: under PostgreSQL's default READ COMMITTED isolation a plain `SELECT` takes no lock, so both still read 1. A transaction gives you atomicity, which is not the same as mutual exclusion — and believing otherwise is the most common misunderstanding in this area."
+            "description": "Promised to an order. `onHand` is unchanged — the goods are still in the warehouse — but `available` drops."
           }
         },
         {
-          "name": "38 Reserve more than exists → 409",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('409 Conflict, not 400', () => {",
-                  "  // The request was perfectly well formed. It failed on current",
-                  "  // state — and a client reading 409 knows a retry may work once",
-                  "  // other reservations are released. A retry after 400 never will.",
-                  "  pm.response.to.have.status(409);",
-                  "});",
-                  "",
-                  "const b = pm.response.json();",
-                  "pm.test('tells the client the actual numbers', () => {",
-                  "  pm.expect(b.requested).to.eql(99);",
-                  "  pm.expect(b.available).to.eql(7);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Release 1",
           "request": {
             "method": "POST",
             "header": [
               {
                 "key": "Content-Type",
                 "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"quantity\": 99,\n  \"reference\": \"order:too-greedy\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/reserve",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "reserve"]
-            },
-            "description": "The `WHERE` clause matches zero rows, so the reservation is refused.\n\nThe response carries both `requested` and `available`, because \"no\" is much less useful than \"no, there are 7\". A cart UI can offer the seven immediately instead of making the customer guess.\n\nOn the failure path only, the service pays for one extra `SELECT` to distinguish \"this product has no inventory row\" (404) from \"the row exists and has too little\" (409). The happy path stays a single statement."
-          }
-        },
-        {
-          "name": "39 Release 1 back",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "pm.test('reserved fell to 2, on-hand still 10', () => {",
-                  "  pm.expect(b.reserved).to.eql(2);",
-                  "  pm.expect(b.onHand).to.eql(10);",
-                  "  pm.expect(b.available).to.eql(8);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
+              },
               {
-                "key": "Content-Type",
-                "value": "application/json"
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1843,44 +623,31 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/release",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "release"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "release"
+              ]
             },
-            "description": "An abandoned cart or a cancelled order. The promise is withdrawn; the goods never moved.\n\nGuarded by `AND quantity_reserved >= :n`. Without it a buggy caller could release more than was ever reserved, drive the counter negative, and silently invent available stock. The `CHECK (quantity_reserved >= 0)` constraint would catch that too — but as a 500 rather than a clear 409, and a control is more useful when it fires at the layer that can explain it."
+            "description": "The promise is cancelled. This is the undo for a reservation."
           }
         },
         {
-          "name": "40 Fulfil 2 — the goods ship",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "",
-                  "pm.test('BOTH counters dropped', () => {",
-                  "  pm.expect(b.onHand).to.eql(8);    // 10 − 2, the units left",
-                  "  pm.expect(b.reserved).to.eql(0);  // 2 − 2, the promise is kept",
-                  "});",
-                  "",
-                  "pm.test('available is unchanged at 8', () => {",
-                  "  // Nothing became more or less available: the units that shipped",
-                  "  // were already spoken for. That is the whole reason reserving",
-                  "  // does not touch on-hand.",
-                  "  pm.expect(b.available).to.eql(8);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Fulfil 2",
           "request": {
             "method": "POST",
             "header": [
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1894,34 +661,31 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/fulfil",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "fulfil"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "fulfil"
+              ]
             },
-            "description": "The only operation in the normal flow that reduces `onHand`.\n\nWatch `available`: it does not move. The two units that shipped were already reserved, so they were never available to anyone else. If reserving had decremented `onHand` instead, this operation would have double-counted and the figures would have drifted."
+            "description": "Shipped: BOTH `onHand` and `reserved` go down."
           }
         },
         {
-          "name": "41 Adjust −1 for breakage",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('on-hand fell to 7', () => {",
-                  "  pm.expect(pm.response.json().onHand).to.eql(7);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Adjust −1 for breakage",
           "request": {
             "method": "POST",
             "header": [
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "body": {
@@ -1935,93 +699,34 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/adjust",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "adjust"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "adjust"
+              ]
             },
-            "description": "A manual correction — a stock count, breakage, a return.\n\nSeparate from `receive` for two reasons: the sign is meaningful, and **`reason` is mandatory**. An unexplained adjustment is indistinguishable from theft or a bug, so the API refuses to accept one.\n\nTry sending `{ \"delta\": -1 }` with no reason: 400."
+            "description": "A signed correction with a mandatory reason. An unexplained adjustment is indistinguishable from theft."
           }
         },
         {
-          "name": "42 Adjustment that would break the invariant → 409",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
-                  "pm.test('the promise to customers is protected', () => {",
-                  "  pm.expect(pm.response.json().message).to.match(/stock/i);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"delta\": -1000,\n  \"reason\": \"warehouse flood\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/adjust",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "adjust"]
-            },
-            "description": "Writing off more than exists is refused twice over.\n\nFirst by the statement's guard: `AND (quantity_on_hand + :delta) >= quantity_reserved`. Writing off damaged goods must not invalidate promises already made to customers — that failure would otherwise surface days later as an order that cannot ship.\n\nSecond, if that guard were ever removed, by the database itself:\n\n```sql\nCHECK (quantity_reserved <= quantity_on_hand)\n```\n\nThat constraint is the **anti-overselling invariant**, and it is the only control here that cannot be bypassed. It holds for every writer — this service, a psql session, a data-fix script written under pressure at 2am. Application validation only protects callers that go through the application, which is a strictly smaller set than \"everyone\"."
-          }
-        },
-        {
-          "name": "43 Read the ledger",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const rows = pm.response.json();",
-                  "",
-                  "pm.test('every movement was recorded', () => {",
-                  "  const types = rows.map((r) => r.type);",
-                  "  ['RECEIVE', 'RESERVE', 'RELEASE', 'FULFIL', 'ADJUST'].forEach((t) =>",
-                  "    pm.expect(types).to.include(t));",
-                  "});",
-                  "",
-                  "pm.test('quantities are SIGNED', () => {",
-                  "  const release = rows.find((r) => r.type === 'RELEASE');",
-                  "  pm.expect(release.quantity).to.be.below(0);",
-                  "  const receive = rows.find((r) => r.type === 'RECEIVE');",
-                  "  pm.expect(receive.quantity).to.be.above(0);",
-                  "});",
-                  "",
-                  "pm.test('each entry captured the balances after it', () => {",
-                  "  rows.forEach((r) => {",
-                  "    pm.expect(r).to.have.property('onHandAfter');",
-                  "    pm.expect(r).to.have.property('reservedAfter');",
-                  "  });",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Read the ledger",
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/movements",
-              "host": ["{{gatewayUrl}}"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
               "path": [
                 "{{apiPrefix}}",
                 "inventory",
@@ -2029,172 +734,47 @@
                 "movements"
               ]
             },
-            "description": "**Why keep a ledger when the balance is right there?**\n\nBecause \"we have 7 units\" is not an answer to \"why do we have 7?\". A balance with no history cannot be audited, cannot be reconciled against a physical count, and cannot tell you whether a discrepancy came from a bug, a mis-scan or theft.\n\nEvery real inventory, accounting and banking system is a ledger with a cached balance — never a balance alone.\n\nQuantities are **signed**, so `SUM(quantity)` reconstructs the balance. If the sum and the stored figure ever disagree, the ledger is right and the balance is the bug.\n\nEach row also stores `onHandAfter` / `reservedAfter`. Strictly redundant — you could replay the history — but during an incident, \"what did this row look like right after that movement?\" should be a `SELECT`, not a fold over history.\n\nThis is also where **idempotency** will live in Milestone 8: \"have I already reserved stock for order X?\" is a question only the ledger can answer."
+            "description": "Every movement, append-only. The balance without this history could not be audited."
           }
         },
         {
-          "name": "44 Current position",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "pm.test('available is always onHand − reserved', () => {",
-                  "  pm.expect(b.available).to.eql(b.onHand - b.reserved);",
-                  "});",
-                  "pm.test('the invariant holds: reserved never exceeds onHand', () => {",
-                  "  pm.expect(b.reserved).to.be.at.most(b.onHand);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
-            },
-            "description": "The current stock position.\n\n**This response is never cached**, and that is deliberate — the sharpest example in the project of \"do not cache everything\". The Inventory Service has no `REDIS_URL` at all.\n\nA cached `available: 1` is not a slightly stale product name. It is a promise to a customer that the warehouse cannot keep, and the staleness window is exactly the window in which the last unit gets sold twice.\n\nIf read load here ever became a real problem, the answer would be a read replica or a coarse in-stock/out-of-stock flag with a very short TTL — never the exact number."
-          }
-        },
-        {
-          "name": "45 ⚡ Concurrency proof — read this, then run the script",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "",
-                  "console.log('');",
-                  "console.log('Postman cannot demonstrate a race — requests here are');",
-                  "console.log('sequential. Run this instead, from the repo root:');",
-                  "console.log('');",
-                  "console.log('    npm run demo:oversell');",
-                  "console.log('');",
-                  "console.log('It creates a product with ONE unit, fires 20 simultaneous');",
-                  "console.log('reservations, and asserts that exactly one succeeded.');"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
-            },
-            "description": "## The proof lives outside Postman\n\nA race condition needs genuinely simultaneous connections contending over the same row. Postman sends requests one after another, and the Collection Runner is no different — so nothing in this collection can demonstrate overselling or its absence.\n\nRun this from the repo root instead:\n\n```\nnpm run demo:oversell\n```\n\nIt creates a fresh product with **exactly one unit**, fires 20 concurrent reservations with `Promise.all`, and reports how many succeeded. A correct service allows exactly one:\n\n```\n  200 OK        1   reservation granted\n  409 Conflict  19  insufficient stock — lost the race\n  ✓ CORRECT\n```\n\nVary it:\n\n```\nnpm run demo:oversell -- --concurrency 50 --stock 3\n```\n\n### See the lock with your own eyes\n\nThe other worthwhile experiment needs two psql sessions. In the first:\n\n```sql\nBEGIN;\nSELECT quantity_on_hand, quantity_reserved\n  FROM inventory_items WHERE sku = 'YOUR-SKU' FOR UPDATE;\n```\n\nIn the second, run the identical statement. **It blocks** — visibly, indefinitely — until you `COMMIT` or `ROLLBACK` the first. That is pessimistic locking: the race is closed by serialising the two transactions.\n\nThen try it without `FOR UPDATE`. Both return instantly, both see the same number, and both would happily proceed to sell the same unit. That difference is the entire milestone."
-          }
-        }
-      ]
-    },
-    {
-      "name": "8 · Cart (authenticated)",
-      "description": "**Run folder 1 first** (for a token) and **folder 5** (for a product).\n\nThe first authenticated resource in the system. Every route here requires `Authorization: Bearer <token>` — the gateway verifies it by asking the Auth Service, then forwards only the resolved user id to the Cart Service.\n\nNotice there is **no `:cartId`** anywhere. The cart is always *yours*, identified by the token. That is not convenience — an endpoint shaped `GET /carts/:cartId` invites insecure direct object reference, where the handler must remember an ownership check and incrementing an id reads a stranger's basket. With no id in the URL there is nothing to forget.",
-      "item": [
-        {
-          "name": "46 GET /cart with no token → 401",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-                  "pm.test('fails closed — no anonymous shared basket', () => {",
-                  "  pm.expect(pm.response.json().message).to.match(/authentication/i);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
-            },
-            "description": "The guard rejects before anything else runs. A cart with no owner is not a cart, and defaulting to a placeholder id would mean every anonymous request shared one basket."
-          }
-        },
-        {
-          "name": "47 GET /cart with a tampered token → 401",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const token = pm.environment.get('accessToken');",
-                  "if (!token) { throw new Error('Run folder 1 first — no accessToken stored'); }",
-                  "const [h, p, s] = token.split('.');",
-                  "const flipped = p.slice(0, -1) + (p.slice(-1) === 'A' ? 'B' : 'A');",
-                  "pm.variables.set('tamperedToken', `${h}.${flipped}.${s}`);"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-                  "pm.test('the SIGNATURE caught it, not the gateway', () => {",
-                  "  // The gateway holds no signing key. It forwarded the token to the",
-                  "  // Auth Service, which verified the signature and said no.",
-                  "  pm.expect(pm.response.json().message).to.match(/invalid|expired/i);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Current position",
           "request": {
             "method": "GET",
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{tamperedToken}}"
+                "value": "Bearer {{accessToken}}"
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
-            },
-            "description": "**Why the gateway asks rather than checks.**\n\nThe obvious design is for the gateway to verify the JWT itself. That needs the signing key — and with HS256 a key that can VERIFY can also MINT. Giving a public-facing process the ability to issue admin tokens, purely so it can read a `sub` claim, is a bad trade.\n\nSo the gateway INTROSPECTS: it forwards the token to `/auth/me` and believes the answer. No key sharing at all.\n\nThe cost is a round trip per authenticated request, which Redis absorbs — successful introspections are cached for 30 seconds under a **SHA-256 hash of the token**, never the token itself. Redis keys appear in SCAN output, slow logs, dashboards and support screenshots; a raw bearer token in any of those is a credential leak that still works.\n\nThat 30s is also the revocation window: a disabled account keeps working for up to half a minute, down from the token's full 15.\n\nThe clean long-term fix is RS256 — Auth keeps the private key, everyone else verifies with the public one and can mint nothing."
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}"
+              ]
+            }
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "4 · Cart",
+      "description": "Always *your* cart — there is no `:cartId` in any route, so there is no id to tamper with. Needs a token from folder 1 and an ACTIVE product from folder 2.",
+      "item": [
         {
-          "name": "48 GET /cart — get or create",
+          "name": "GET /cart — get or create",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "pm.test('an empty cart, not a 404', () => {",
-                  "  pm.expect(b.items).to.eql([]);",
-                  "  pm.expect(b.subtotal).to.eql('0.00');",
-                  "  pm.expect(b.itemCount).to.eql(0);",
-                  "});",
-                  "pm.test('owned by me', () => {",
-                  "  pm.expect(b.userId).to.eql(pm.environment.get('userId'));",
-                  "});",
-                  "pm.environment.set('cartId', b.id);"
+                  "pm.environment.set('cartId', pm.response.json().id);"
                 ]
               }
             }
@@ -2209,41 +789,19 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart"
+              ]
             },
-            "description": "A GET that can create a row — unusual, and worth defending.\n\nThe alternative is `POST /cart` first, which means every client handles \"no cart yet\" and the first page load costs two round trips. \"Your cart\" conceptually always exists and is merely empty, so the API models it that way.\n\nIt is safe because it is **idempotent**: call it a hundred times, get the same single cart. That is guaranteed by a PARTIAL UNIQUE INDEX (`WHERE status = 'ACTIVE'`), not by convention — two simultaneous first requests both find nothing and both insert, and the index makes the loser fail so the repository can re-read the winner. Same check-then-act race as the duplicate email and the last unit of stock, same answer: let the database arbitrate.\n\nSend this twice and confirm the `id` does not change."
+            "description": "An empty cart, not a 404. Calling it repeatedly yields the same one."
           }
         },
         {
-          "name": "49 POST /cart/items — add a product",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "const b = pm.response.json();",
-                  "pm.test('one line, quantity 2', () => {",
-                  "  pm.expect(b.items).to.have.lengthOf(1);",
-                  "  pm.expect(b.items[0].quantity).to.eql(2);",
-                  "});",
-                  "pm.test('price and name were filled in by the SERVER', () => {",
-                  "  // Neither was in the request body. Both came from the Product",
-                  "  // Service, and both are now snapshotted onto the line.",
-                  "  pm.expect(b.items[0].unitPrice).to.be.a('string');",
-                  "  pm.expect(b.items[0].name).to.not.be.empty;",
-                  "});",
-                  "pm.test('lineTotal = unitPrice × quantity, exactly', () => {",
-                  "  const [item] = b.items;",
-                  "  const cents = Math.round(Number(item.unitPrice) * 100) * item.quantity;",
-                  "  pm.expect(item.lineTotal).to.eql((cents / 100).toFixed(2));",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Add a product",
           "request": {
             "method": "POST",
             "header": [
@@ -2267,30 +825,20 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items"
+              ]
             },
-            "description": "**The snapshot decision — the most consequential choice in this milestone.**\n\n`unitPrice` and `name` are copied from the catalogue at add-time, not looked up on every read.\n\n- **Live lookup**: always accurate, and the total silently changes while the customer looks at it. A £40 basket becomes £46 between the cart page and the checkout button, with no explanation. Cart reads also break when the Product Service is down.\n- **Snapshot**: the total is stable, the cart renders without the catalogue, and you have a record of *what the customer was actually shown* — which is what a dispute or a regulator asks for.\n\nThe cost is staleness, handled by **re-validating at checkout**: compare each snapshot against the live price and tell the customer what moved, rather than silently charging either figure. That belongs to the order workflow (M8).\n\nThe rule: **snapshot what the customer was shown; re-check before taking money.**\n\nAlso note this is the first service-to-service call that does not go through the gateway. Cart → Product, synchronously. Adding to a cart now fails if the catalogue is down — accepted, because the alternative is trusting a client-supplied price. Reading a cart never calls Product, because the snapshot is already there."
+            "description": "Note what the response contains that the request did not: `name` and `unitPrice`. Both are snapshotted by the server from the catalogue."
           }
         },
         {
-          "name": "50 POST /cart/items again — upsert, not a second line",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "const b = pm.response.json();",
-                  "pm.test('STILL one line — the quantity grew instead', () => {",
-                  "  pm.expect(b.items).to.have.lengthOf(1);",
-                  "  pm.expect(b.items[0].quantity).to.eql(3);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Add the same product again",
           "request": {
             "method": "POST",
             "header": [
@@ -2314,74 +862,20 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items"
+              ]
             },
-            "description": "Adding a product already in the cart means \"one more of them\", not \"a second line for the same thing\".\n\nEnforced by a unique index on `(cart_id, product_id)` plus `INSERT ... ON CONFLICT DO UPDATE` — one statement, so two concurrent adds cannot interleave into a lost update.\n\nNote the snapshot fields are **not** overwritten on conflict. The price the customer first saw is the price that stays; re-reading it here would quietly reprice their basket, which is exactly what snapshotting exists to prevent."
+            "description": "An upsert: quantity 3 on one line, not a second line."
           }
         },
         {
-          "name": "51 Try to set your own price → 400",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
-                  "pm.test('the injected fields are named and refused', () => {",
-                  "  const m = pm.response.json().message.join(' ');",
-                  "  pm.expect(m).to.include('unitPrice');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"quantity\": 1,\n  \"unitPrice\": \"0.01\",\n  \"userId\": \"00000000-0000-4000-8000-000000000000\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items"]
-            },
-            "description": "**Two attacks in one request, both closed by the same mechanism.**\n\n`unitPrice: \"0.01\"` — buying a laptop for a penny. `userId` — writing into someone else's cart.\n\n`AddCartItemDto` declares neither field, so `whitelist` strips them and `forbidNonWhitelisted` turns the attempt into a loud 400 rather than a silent removal.\n\nBut the DTO is only the second line of defence. Even without it, the price comes from the Product Service and the user id comes from the verified token — neither is ever read from the body. **Never trust the client for anything that determines what someone pays or whose data they touch.**"
-          }
-        },
-        {
-          "name": "52 PATCH quantity — absolute, not a delta",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('quantity is now exactly 5', () => {",
-                  "  pm.expect(pm.response.json().items[0].quantity).to.eql(5);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Set an absolute quantity",
           "request": {
             "method": "PATCH",
             "header": [
@@ -2405,30 +899,21 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items",
+                "{{productId}}"
+              ]
             },
-            "description": "An **absolute** quantity, deliberately.\n\nA delta (`{ \"change\": +1 }`) is not idempotent: a client that retries after a timeout adds twice, and the customer buys two laptops. An absolute value can be retried safely any number of times.\n\nMinimum is 1, not 0. Accepting 0 as \"remove\" would give two ways to do one thing, and a client sending 0 by accident would silently lose a line instead of getting an error. **DELETE means delete.**\n\nSend this twice and confirm the quantity stays 5."
+            "description": "PATCH sets the quantity; it is not a delta."
           }
         },
         {
-          "name": "53 DELETE a line",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('the cart is empty again', () => {",
-                  "  const b = pm.response.json();",
-                  "  pm.expect(b.items).to.eql([]);",
-                  "  pm.expect(b.subtotal).to.eql('0.00');",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Remove a line",
           "request": {
             "method": "DELETE",
             "header": [
@@ -2439,30 +924,20 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
-            },
-            "description": "Returns the whole cart rather than 204, so the client can re-render without a follow-up GET. Every mutation on this resource does the same."
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items",
+                "{{productId}}"
+              ]
+            }
           }
         },
         {
-          "name": "54 DELETE /cart — empty it, keep it",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const b = pm.response.json();",
-                  "pm.test('the cart SURVIVES — same id', () => {",
-                  "  pm.expect(b.id).to.eql(pm.environment.get('cartId'));",
-                  "  pm.expect(b.items).to.eql([]);",
-                  "});"
-                ]
-              }
-            }
-          ],
+          "name": "Empty the cart",
           "request": {
             "method": "DELETE",
             "header": [
@@ -2473,78 +948,40 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart"
+              ]
             },
-            "description": "Removes the lines and **keeps the cart row**.\n\nDeleting it would work and would be wrong: the row carries the identity and creation time that abandonment analytics and recovery emails rely on. Carts are never deleted — they transition ACTIVE → CONVERTED or ABANDONED.\n\nThat is also the strongest argument for **PostgreSQL over Redis** here. \"Which carts contain the product we just discontinued?\" and \"email everyone with a cart older than a day\" are WHERE clauses in Postgres and full keyspace scans in Redis. Add durability (Redis loses up to a second on the default AOF setting) and transactional conversion to an order, and the supposed speed win — a few hundred microseconds on an operation already under a millisecond — stops being worth anything.\n\nRedis IS used in this milestone, for exactly one thing: caching token introspection at the gateway. That is the difference between using a tool because it fits and using it because it is installed."
+            "description": "Empties it and KEEPS it — the row carries the identity abandonment analytics rely on."
           }
         }
       ]
     },
     {
-      "name": "9 · Messaging (events)",
-      "description": "**Run folders 1, 5 and 8 first** — a token, a product, and that product in your cart.\n\nRequires RabbitMQ:\n\n```\ndocker run -d --name ecommerce-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management\n```\n\nManagement UI: http://localhost:15672 (guest / guest).\n\nMessaging is built with **NestJS's built-in integration** — `@nestjs/microservices` with `Transport.RMQ`. Publishers call `ClientProxy.emit()`; the Cart Service consumes with `@EventPattern()`.",
+      "name": "5 · Orders",
+      "description": "Milestone 8, step 1 — the simple version. `POST /orders` reads your cart, copies the lines into an order in one local transaction, and returns it CONFIRMED.\n\nTwo requests near the end show what it does NOT do yet: the cart is not emptied, and no stock is reserved. Step 2 adds the saga and the outbox that fix both.",
       "item": [
         {
-          "name": "55 Snapshot before — note the cart price",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const line = pm.response.json().items.find((i) => i.productId === pm.environment.get('productId'));",
-                  "pm.test('the line exists — run folder 8 first', () => pm.expect(line).to.exist);",
-                  "pm.environment.set('snapshotPrice', line.unitPrice);",
-                  "console.log('snapshot unitPrice = ' + line.unitPrice);"
-                ]
-              }
-            }
-          ],
+          "name": "Add something to the cart",
           "request": {
-            "method": "GET",
+            "method": "POST",
             "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
               {
                 "key": "Authorization",
                 "value": "Bearer {{accessToken}}"
               }
             ],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
-            },
-            "description": "Records the snapshot price so the next requests can show it does not move."
-          }
-        },
-        {
-          "name": "56 Change the price (publishes product.price_changed)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('the catalogue now says 24.99', () => {",
-                  "  pm.expect(pm.response.json().price).to.eql('24.99');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"price\": 24.99\n}",
+              "raw": "{\n  \"productId\": \"{{productId}}\",\n  \"quantity\": 3\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2552,79 +989,49 @@
               }
             },
             "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items"
+              ]
             },
-            "description": "The Product Service compares before and after and publishes **only what actually changed** — `product.price_changed`, carrying the PREVIOUS price as well as the new one.\n\nAn event that says \"the price changed\" without saying what it changed *from* forces every consumer to have kept its own copy, which defeats the point of publishing it.\n\nNote what is NOT published: a generic `product.updated` with the whole row. That is the lazy option — it pushes the diffing work onto every consumer, each of which must work out whether it cares.\n\nWatch the Product Service log for `published product.price_changed`, then the Cart Service log for `flagged 1 cart line(s)`."
+            "description": "So there is something to order."
           }
         },
         {
-          "name": "57 The cart line was FLAGGED, not repriced",
+          "name": "POST /orders — place the order",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const line = pm.response.json().items.find((i) => i.productId === pm.environment.get('productId'));",
-                  "",
-                  "pm.test('the snapshot is UNCHANGED', () => {",
-                  "  // The customer keeps seeing the price they were shown.",
-                  "  pm.expect(line.unitPrice).to.eql(pm.environment.get('snapshotPrice'));",
-                  "});",
-                  "",
-                  "pm.test('the catalogue price is recorded alongside it', () => {",
-                  "  pm.expect(line.cataloguePrice).to.eql('24.99');",
-                  "});"
+                  "const b = pm.response.json();",
+                  "pm.environment.set('orderId', b.id);",
+                  "pm.environment.set('orderNumber', b.orderNumber);"
                 ]
               }
             }
           ],
           "request": {
-            "method": "GET",
+            "method": "POST",
             "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
               {
                 "key": "Authorization",
                 "value": "Bearer {{accessToken}}"
               }
             ],
-            "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
-            },
-            "description": "The consumer ran, and this is the whole point of the design:\n\n- `unitPrice` — **unchanged**. Quietly repricing would make the basket total move while the customer looks at it.\n- `cataloguePrice` — what the catalogue says now, so the UI can show \"was 19.99, now 24.99\".\n\n**Snapshot what the customer was shown; flag what moved; re-check before taking money.** The re-check belongs to checkout (Milestone 8).\n\nIf `cataloguePrice` is still absent, wait a second and re-send — this is asynchronous by design. That lag *is* eventual consistency, and it is the price of the decoupling."
-          }
-        },
-        {
-          "name": "58 Archive the product (publishes product.archived)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('status is ARCHIVED', () => {",
-                  "  pm.expect(pm.response.json().status).to.eql('ARCHIVED');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"status\": \"ARCHIVED\"\n}",
+              "raw": "{}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2632,37 +1039,76 @@
               }
             },
             "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ]
             },
-            "description": "A different event on the same aggregate, so a consumer binds to exactly the one it cares about rather than filtering a firehose.\n\nBoth arrive at the same queue, `cart.catalogue-events`, because both handlers touch the same table. The bindings are named explicitly rather than using `product.*`, so a future product event becomes a deliberate decision to handle rather than something that silently starts arriving."
+            "description": "An EMPTY body. The lines come from the cart and the owner from the verified token — a client that could name its own prices would order a laptop for a penny."
           }
         },
         {
-          "name": "59 The line is marked unavailable — and still there",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const line = pm.response.json().items.find((i) => i.productId === pm.environment.get('productId'));",
-                  "",
-                  "pm.test('the line was NOT removed', () => {",
-                  "  // Silently deleting an item alarms a customer far more than showing",
-                  "  // it greyed out with a reason.",
-                  "  pm.expect(line).to.exist;",
-                  "});",
-                  "",
-                  "pm.test('it is flagged unavailable', () => {",
-                  "  pm.expect(line.unavailable).to.eql(true);",
-                  "});"
-                ]
+          "name": "GET /orders/:id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
               }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders",
+                "{{orderId}}"
+              ]
             }
-          ],
+          }
+        },
+        {
+          "name": "GET /orders",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "Yours only, newest first, in a paginated envelope."
+          }
+        },
+        {
+          "name": "The cart is still full (step 2 fixes this)",
           "request": {
             "method": "GET",
             "header": [
@@ -2673,29 +1119,19 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart"
+              ]
             },
-            "description": "The consumer flagged the line rather than deleting it.\n\nNote what this crossed: the Cart Service learned about a catalogue change **without calling the Product Service**. No synchronous hop, no coupling to its availability, no shared database. That is what asynchronous messaging buys — and the cost is that the flag arrives *eventually*, not instantly."
+            "description": "Emptying the cart means writing to another service’s database, which cannot join the transaction that wrote the order. Step 2 publishes `order.confirmed` and lets the Cart Service convert its own cart."
           }
         },
         {
-          "name": "60 ⚡ Run the demo script",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "console.log('');",
-                  "console.log('    npm run demo:messaging');",
-                  "console.log('');",
-                  "console.log('Then open http://localhost:15672 (guest/guest).');"
-                ]
-              }
-            }
-          ],
+          "name": "Stock did not move (step 2 fixes this)",
           "request": {
             "method": "GET",
             "header": [
@@ -2705,40 +1141,88 @@
               }
             ],
             "url": {
-              "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}"
+              ]
             },
-            "description": "## See the whole flow in one command\n\n```\nnpm run demo:messaging\n```\n\nCreates a product, puts it in a cart, changes the catalogue price, and shows the line flagged without being repriced — with the ~1 second lag that *is* eventual consistency.\n\n### Then look at the management UI\n\nhttp://localhost:15672 — guest / guest\n\n| Where | What to look at |\n| --- | --- |\n| **Queues → ecommerce_events** | The queue Nest created for you. Watch the depth spike and drain. |\n| **Connections** | One per running service |\n| **Queues → ecommerce_events → Get messages** | Peek at a raw message — note Nest wraps your payload in `{ pattern, data }` |\n\n### What is deliberately missing\n\nNo retry, no dead-letter queue, no idempotency. Stop the Cart Service, change a price, start it again — the event is waiting in the queue, because the queue is durable. But make a *handler* fail and the message is simply lost.\n\nThat is fine for these events and would not be for an order. Each of those mechanisms arrives in the milestone that needs it, rather than being built upfront."
+            "description": "`reserved` is unchanged: nothing calls the Inventory Service, so two customers could both order the last unit. Step 2 reserves per line — the first write into another service’s database, and therefore the first thing that has to be undoable."
+          }
+        },
+        {
+          "name": "Cancel the order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Changed my mind\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}/cancel",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders",
+                "{{orderId}}",
+                "cancel"
+              ]
+            },
+            "description": "A status change and nothing more today, because nothing was reserved and nobody was charged. In step 2 this has to release stock."
           }
         }
       ]
-    }
-  ],
-  "event": [
+    },
     {
-      "listen": "prerequest",
-      "script": {
-        "type": "text/javascript",
-        "exec": [
-          "// Runs before every request in the collection.",
-          "const required = ['gatewayUrl', 'apiPrefix', 'password'];",
-          "const missing = required.filter((key) => !pm.environment.get(key));",
-          "if (missing.length > 0) {",
-          "  throw new Error(",
-          "    `Missing environment variable(s): ${missing.join(', ')}. ` +",
-          "    'Select the \"ecommerce · local\" environment in the top-right picker.'",
-          "  );",
-          "}"
-        ]
-      }
-    }
-  ],
-  "variable": [
-    {
-      "key": "note",
-      "value": "All real values live in the environment, not here, so the collection can be shared without carrying anyone's tokens.",
-      "type": "string"
+      "name": "6 · Cleanup",
+      "description": "Run last, or not at all. Deleting the product makes the Inventory, Cart and Orders folders fail until the Catalogue folder is run again.",
+      "item": [
+        {
+          "name": "Delete product (soft)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
+            },
+            "description": "Soft delete: the row stays and `deleted_at` is set, so orders that reference this product still make sense. Kept in its own folder because deleting the product breaks every folder above it."
+          }
+        }
+      ]
     }
   ]
 }

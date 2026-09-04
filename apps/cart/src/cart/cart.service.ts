@@ -5,10 +5,10 @@ import {
   MAX_LINE_QUANTITY,
   UpdateCartItemDto,
 } from '@ecommerce/contracts';
+import { lineTotal, sumDecimals } from '@ecommerce/money';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ProductLookupService } from '../catalog/product-lookup.service';
 import { CartItemRecord, CartRecord, CartRepository } from './cart.repository';
-import { lineTotal, sumDecimals } from './money';
 
 @Injectable()
 export class CartService {
@@ -113,7 +113,7 @@ export class CartService {
  * that can disagree with the lines it summarises, and when it does you
  * cannot tell which is wrong.
  *
- * The arithmetic goes through `money.ts`, which works in integer minor
+ * The arithmetic goes through `@ecommerce/money`, which works in integer minor
  * units. Summing `Number(unitPrice) * quantity` would be simpler and would
  * quietly produce 59.96999999999999.
  */

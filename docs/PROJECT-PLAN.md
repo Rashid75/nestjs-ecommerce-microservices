@@ -1,23 +1,23 @@
 # Project Plan & Progress
 
 The 15-milestone plan for this backend, with what is actually built as of
-**2026-08-27**.
+**2026-09-03**.
 
 This file is the source of truth for progress. It is updated at the end of
 every milestone — completed work moves from _Planned_ to _Delivered_, and
 anything deliberately deferred is recorded with the **trigger** that should
 bring it back, rather than a vague "later".
 
-|                         |                                             |
-| ----------------------- | ------------------------------------------- |
-| **Milestones complete** | 7 of 15                                     |
-| **Services running**    | Gateway, Auth, Product, Inventory, Cart     |
-| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3          |
-| **Databases**           | `ecommerce_auth_db`, `ecommerce_product_db` |
-| **Next milestone**      | 8 — Order Service and the Saga              |
+|                         |                                                |
+| ----------------------- | ---------------------------------------------- |
+| **Milestones complete** | 7 of 15, plus step 1 of milestone 8            |
+| **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order |
+| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3             |
+| **Databases**           | one per service, five in total                 |
+| **Next**                | **M8 step 2** — saga, compensation, outbox     |
 
 ```text
-M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ░░
+M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ▓░  ← step 1 of 2
 M9 ░░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
@@ -37,6 +37,13 @@ This is a **learning project**. The rules it runs under:
 5. **`synchronize: false`.** Every schema change is a migration.
 6. **Database per service.** No service reads another's tables.
 7. **Commits are manual.** Changes are prepared; Rashid reviews and commits.
+8. **Simple first, then the complexity — inside the same milestone.** Where a
+   milestone has a hard idea in it, build the plain version first, run it,
+   and find its defects by hand. Only then add the machinery that fixes them,
+   with the specific failure it answers named next to it. A pattern
+   introduced before its problem is a pattern taken on trust, and this
+   project is not for accumulating trust. Milestone 8 is the first split this
+   way: a plain Order Service, then the saga and the outbox.
 
 ---
 
@@ -46,19 +53,33 @@ This is a **learning project**. The rules it runs under:
    Client
      ▼
 ┌──────────────────────┐
-│  API Gateway :3000   │  public · /api · DTO validation · routing
+│  API Gateway :3000   │  public · /api · DTO validation · auth guard · routing
 └──────────┬───────────┘
-           │ HTTP (axios, 5s timeout, honest failure mapping)
-     ┌─────┴──────┐
-     ▼            ▼
-┌──────────┐  ┌─────────────┐  ┌───────────────┐
-│Auth :3001│  │Product :3002│  │Inventory :3003│  all on 127.0.0.1
-└────┬─────┘  └──────┬──────┘  └───────┬───────┘
-     ▼               ▼                 ▼
- ecommerce_      ecommerce_       ecommerce_
-  auth_db        product_db       inventory_db
+           │ HTTP (axios, 5s timeout, honest failure mapping, X-User-Id)
+   ┌───────┼────────┬──────────────┬──────────────┐
+   ▼       ▼        ▼              ▼              ▼
+┌──────┐ ┌───────┐ ┌───────────┐ ┌────────┐ ┌────────────┐
+│Auth  │ │Product│ │Inventory  │ │Cart    │ │Order :3005 │  all on 127.0.0.1
+│:3001 │ │:3002  │ │:3003      │ │:3004   │ │(saga owner)│
+└──┬───┘ └───┬───┘ └─────┬─────┘ └───┬────┘ └─────┬──────┘
+   ▼         ▼           ▼           ▼            ▼
+ecommerce_ ecommerce_ ecommerce_  ecommerce_  ecommerce_
+ auth_db   product_db inventory_db  cart_db     order_db
 
-Redis :6379   ecom:gateway:*  rate-limit counters (required)
+Checkout, one request (M8 step 1 — deliberately the naive version):
+   Order ──GET /cart──────────────► Cart          read, nothing to undo
+   Order ──write order + items────► its own DB    one local transaction
+   No stock reserved · the cart is not emptied · no event published.
+   Step 2 fixes all three, and that is where the saga and the outbox arrive.
+
+RabbitMQ :5672   ecommerce_events queue
+   Auth      → user.registered
+   Product   → product.price_changed · product.archived
+   Inventory → inventory.reserved · inventory.released
+   Order     → nothing yet — step 2 of M8
+   Cart      ← consumes the catalogue events
+
+Redis :6379   ecom:gateway:*  rate-limit counters + token introspection
               ecom:product:*  cache-aside entries (optional, fails open)
 ```
 
@@ -424,11 +445,116 @@ for the HTTP paths.
 
 ---
 
-## ⬜ Milestone 8 — Order Service and Distributed Workflow
+## 🟡 Milestone 8 — Order Service and Distributed Workflow
 
-**Next up.** The central workflow: validate cart → reserve inventory → process payment →
-confirm order → publish. Saga pattern, compensation, eventual consistency,
-idempotency.
+**Built in TWO STEPS, on purpose.** Step 1 is complete; step 2 is next, and
+it is part of this milestone rather than a later one.
+
+### Why it is split
+
+The saga, the outbox and idempotency are answers. Built first, they are
+answers to questions nobody has asked yet — you end up maintaining machinery
+whose purpose you have taken on trust.
+
+So step 1 builds the **naive** version: read the cart, write an order, return
+it. It works, and it has four specific defects you can reproduce in Postman
+in about a minute each. Step 2 then fixes exactly those four, and every piece
+of machinery it adds has a failure you have already seen attached to it.
+
+That order — problem first, mechanism second — is the whole reason this
+project exists.
+
+---
+
+### ✅ Step 1 — a plain Order Service (complete)
+
+**Order Service** (`:3005`, `ecommerce_order_db`, inspector 9234)
+
+```text
+POST /orders
+   │
+   1 GET cart:3004 /cart        read the caller's cart
+   2 refuse an empty one        400, nothing written
+   3 copy the lines into an     ONE local transaction:
+     order and its items        orders + order_items
+   4 return it, CONFIRMED
+```
+
+- Two tables: `orders`, `order_items`
+- `order_number` from a PostgreSQL **sequence** (`ORD-00000001`) — customer
+  facing, generated by the database so two concurrent checkouts cannot
+  collide
+- `POST /orders`, `GET /orders`, `GET /orders/:id`, `POST /orders/:id/cancel`
+- Order lines are the **third snapshot** of the same product data:
+  catalogue → cart line → order line. Each answers a different question:
+  what it costs now, what the customer was shown, what they agreed to pay
+- `line_total` is **stored**, unlike the cart's derived total, with a
+  `CHECK (line_total = unit_price * quantity)` keeping it honest
+- Cancellation is a **compare-and-set** (`WHERE status = 'CONFIRMED'`), so
+  two concurrent cancellations cannot both succeed
+- Every read is scoped by `user_id` **in the WHERE clause**, so a missing
+  filter fails closed rather than leaking
+- `libs/money` — the exact-decimal arithmetic moved out of the Cart Service
+  when the Order Service became its second consumer
+
+**Key decisions**
+
+| Decision                                     | Why                                                                                                                                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Empty `CreateOrderDto`, prices from the cart | A client that could send its own lines would order a £900 laptop for 1p. The empty DTO still exists so `forbidNonWhitelisted` rejects a body rather than ignoring it.   |
+| The order recomputes its own totals          | Same function, same library as the cart — but the order is the record of what will be charged, and must not depend on another service getting the multiplication right. |
+| `line_total` stored, cart total derived      | A cart is a working document; an order is a financial record that must report the same figure in five years.                                                            |
+| Order number from a sequence                 | Non-transactional on purpose: two checkouts get 41 and 42 and neither waits. Gaps are an accounting curiosity; duplicate order numbers are a support incident.          |
+| 404, not 403, for someone else's order       | A 403 confirms the order exists.                                                                                                                                        |
+| `POST /orders/:id/cancel`, not `PATCH`       | A state transition that can be refused is not "write a value into a field". `PATCH` invites a client to believe it can set SHIPPED.                                     |
+
+---
+
+### ⬜ Step 2 — the distributed workflow (next)
+
+Four defects in step 1, each with the machinery that fixes it. Reproduce them
+first; they are all easy to see.
+
+| Defect you can reproduce today                                                        | What step 2 adds                                                                                                                                     |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Overselling.** Nothing reserves stock. Two customers can both order the last unit.  | Call `POST /inventory/:id/reserve` per line — the first step that changes ANOTHER service's database, and therefore the first that must be undoable. |
+| **The cart is never emptied.** Order twice from the same cart and you get two orders. | Publish `order.confirmed`; the Cart Service consumes it and marks that cart `CONVERTED`.                                                             |
+| **A double-clicked button creates two orders.**                                       | An `Idempotency-Key` header with a partial unique index on `(user_id, idempotency_key)`.                                                             |
+| **Nothing else is told an order happened.** No email, no analytics, no warehouse.     | A **transactional outbox**: the event is written in the same transaction as the order, and a relay publishes it afterwards.                          |
+
+The concepts, in the order they will be introduced:
+
+1. **Why one transaction cannot cover this.** Cart, inventory and orders are
+   three databases owned by three services. `BEGIN … COMMIT` does not reach
+   across them, and two-phase commit holds locks across a network and blocks
+   every participant on the slowest one.
+2. **Saga.** A sequence of local transactions, each with a compensating
+   action. Orchestrated (one service owns the flow) rather than choreographed
+   (everyone reacts to events and nowhere is the workflow written down).
+3. **Compensation is not rollback.** A rollback erases history; a
+   compensation is a new action that undoes an old one. The stock ledger ends
+   up holding a RESERVE _and_ a RELEASE — the honest record, because for a
+   moment that stock really was unavailable to someone else.
+4. **A saga log** (`order_saga_steps`), so "which participants did we already
+   change, and did we successfully undo them?" is answerable in SQL months
+   later — and so `CANCELLED` (undo worked) can be distinguished from
+   `FAILED` (undo did not).
+5. **Idempotency**, and why the constraint has to be in the database rather
+   than in an `if`.
+6. **The transactional outbox.** Publish-then-commit announces orders that do
+   not exist; commit-then-publish loses them silently when the process dies.
+   The outbox removes the choice, at the cost of at-least-once delivery.
+7. **Idempotent consumers**, and the cheapest kind: an operation that is
+   naturally repeatable (`UPDATE … WHERE status = 'ACTIVE'`) needs no ledger
+   of processed events at all.
+
+Payment stays out of both steps — the Payment Service is M9, and it slots
+into the saga between reservation and confirmation, with a refund as its
+compensation.
+
+### Verified (step 1)
+
+91 unit tests across eight projects; all six services build and lint.
 
 ---
 
@@ -515,7 +641,17 @@ exists so that "not yet" never quietly becomes "never".
 | **Elasticsearch**                  | Facets, relevance ranking or typo tolerance. Not before.                                                                     | post-M15       |
 | **Category nesting**               | An actual requirement for subtrees. The migration is additive.                                                               | on demand      |
 | **Category pagination**            | Hundreds of categories, or nesting.                                                                                          | on demand      |
-| **Integer minor units for money**  | Revisit when the Payment Service does real arithmetic.                                                                       | M9             |
+| **Integer minor units for money**  | Done — `@ecommerce/money`, shared by Cart and Order. Storage stays DECIMAL; the arithmetic never leaves integers.            | delivered      |
+| **Saga + compensation**            | Reserving stock is the first write into another service's database, so it needs an undo. Reproduce the oversell first.       | **M8 step 2**  |
+| **Transactional outbox**           | Nothing is told an order happened. Publishing after the commit loses events; before it announces orders that do not exist.   | **M8 step 2**  |
+| **Idempotency-Key on checkout**    | A double-clicked button creates two orders. Reproduce it in Postman before adding the index.                                 | **M8 step 2**  |
+| **Cart converted after checkout**  | The cart still has everything in it after an order. Needs an event, because the cart is another service's database.          | **M8 step 2**  |
+| **Saga recovery worker**           | A workflow that no longer fits in one request — "PENDING for more than five minutes" over the saga log.                      | M9             |
+| **Idempotent inventory commands**  | A retried `reserve` double-reserves. Key the command on its `reference`.                                                     | M9/M12         |
+| **Processed-events ledger**        | A consumer whose work is not naturally repeatable — sending an email, charging a card.                                       | M10            |
+| **Topic exchange with bindings**   | A second service needing its own copy of `order.confirmed`. Today one queue means consumers would COMPETE.                   | M10            |
+| **Outbox retention**               | Disk pressure. Published rows are kept as an audit trail.                                                                    | when measured  |
+| **Event envelope**                 | An `eventId` is what makes at-least-once delivery survivable, so it arrives with the outbox. Correlation ids follow in M11.  | **M8 step 2**  |
 | **Secret manager**                 | Before any shared or hosted environment. `.env` is a local-development convenience.                                          | M14            |
 
 ---
@@ -545,8 +681,8 @@ readable on a server shared with other projects.
 | Auth      | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅ created, migrated |
 | Product   | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅ created, migrated |
 | Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅ created, migrated |
-| Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | M6                   |
-| Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | M8                   |
+| Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | ✅ created, migrated |
+| Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | ⏳ migration written |
 | Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | M9                   |
 
 ## Port inventory
@@ -556,7 +692,10 @@ readable on a server shared with other projects.
 | API Gateway      | 3000 | 9229           |
 | Auth             | 3001 | 9230           |
 | Product          | 3002 | 9231           |
-| _(next service)_ | 3003 | 9232           |
+| Inventory        | 3003 | 9232           |
+| Cart             | 3004 | 9233           |
+| Order            | 3005 | 9234           |
+| _(next service)_ | 3006 | 9235           |
 
 Each service needs its own inspector port. `@nx/js:node` defaults every one of
 them to 9229, and the collision stops the second service booting with an error

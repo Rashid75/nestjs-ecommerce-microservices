@@ -34,5 +34,8 @@ export * from './lib/inventory/inventory.dto';
 // --- cart ---
 export * from './lib/cart/cart.dto';
 
+// --- orders ---
+export * from './lib/orders/order.dto';
+
 // --- events ---
 export * from './lib/events/events';

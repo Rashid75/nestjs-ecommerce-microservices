@@ -22,13 +22,13 @@
 import { execSync } from 'node:child_process';
 
 /**
- * 3000-3004 are the HTTP ports. 9229-9233 are the Node INSPECTOR ports that
+ * 3000-3005 are the HTTP ports. 9229-9234 are the Node INSPECTOR ports that
  * @nx/js:node attaches — an orphan holding 9229 produces
  * "Starting inspector on localhost:9229 failed: address already in use",
  * which stops the second service from booting even when its HTTP port is free.
  */
 const DEFAULT_PORTS = [
-  3000, 3001, 3002, 3003, 3004, 9229, 9230, 9231, 9232, 9233,
+  3000, 3001, 3002, 3003, 3004, 3005, 9229, 9230, 9231, 9232, 9233, 9234,
 ];
 
 const ports = process.argv.slice(2).length

@@ -40,25 +40,33 @@ item back.
 ```text
    Client
      │  POST /api/auth/register   ·   GET  /api/products?search=&page=
-     │  POST /api/auth/login      ·   POST /api/products
-     │  GET  /api/auth/me         ·   GET  /api/categories
+     │  POST /api/auth/login      ·   POST /api/cart/items
+     │  GET  /api/auth/me         ·   POST /api/orders
      ▼
 ┌──────────────────────┐
-│  API Gateway :3000   │  public · /api · DTO validation · routing
+│  API Gateway :3000   │  public · /api · DTO validation · auth guard · routing
 └──────────┬───────────┘
-           │ HTTP (axios, 5s timeout, honest failure mapping)
-     ┌─────┴───────────────┐
-     ▼                     ▼
-┌──────────────┐ ┌────────────────┐ ┌──────────────────┐
-│  Auth :3001  │ │ Product :3002  │ │ Inventory :3003  │  all 127.0.0.1
-└──────┬───────┘ └───────┬────────┘ └────────┬─────────┘
-       │ Sequelize       │ Sequelize         │ Sequelize
-       ▼                 ▼                   ▼
-┌──────────────┐ ┌────────────────┐ ┌────────────────────┐
-│ ecommerce_   │ │ ecommerce_     │ │ ecommerce_         │
-│   auth_db    │ │   product_db   │ │   inventory_db     │
-└──────────────┘ └────────────────┘ └────────────────────┘
+           │ HTTP (axios, 5s timeout, honest failure mapping, X-User-Id)
+   ┌───────┼─────────┬───────────┬──────────┐
+   ▼       ▼         ▼           ▼          ▼
+┌──────┐┌───────┐┌───────────┐┌────────┐┌─────────────┐
+│Auth  ││Product││Inventory  ││Cart    ││Order :3005  │  all 127.0.0.1
+│:3001 ││:3002  ││:3003      ││:3004   ││orders       │
+└──┬───┘└───┬───┘└─────┬─────┘└───┬────┘└──────┬──────┘
+   │        │          │          │            │  Sequelize, one layer only
+   ▼        ▼          ▼          ▼            ▼
+ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_
+ auth_db   product_db inventory_db cart_db   order_db
                           schema from migrations only
+
+Checkout today (M8 step 1 — the simple version, on purpose):
+   read the cart → write the order and its lines in ONE local transaction
+   No stock reserved, cart not emptied, no event published. Step 2 of M8
+   adds the saga, the compensation and the outbox that fix those.
+
+           RabbitMQ :5672  ·  queue ecommerce_events
+  user.registered · product.price_changed · product.archived
+  inventory.reserved · inventory.released
 
            Redis :6379
   ecom:gateway:*   rate-limit counters   REQUIRED by the gateway
@@ -167,12 +175,27 @@ ecommerce/
 │           ├── config/
 │           └── main.ts
 │   │
-│   └── inventory/                    INTERNAL · 3003 · inspector 9232
+│   ├── inventory/                    INTERNAL · 3003 · inspector 9232
+│   │   └── src/
+│   │       ├── inventory/            models, repository, service, controller
+│   │       │   └── inventory.repository.ts   the atomic reserve statement
+│   │       ├── database/             migrations: items + ledger
+│   │       ├── config/
+│   │       └── main.ts
+│   │
+│   ├── cart/                         INTERNAL · 3004 · inspector 9233
+│   │   └── src/
+│   │       ├── cart/                 models, repository, service, controller
+│   │       ├── catalog/              product lookup + catalogue event handlers
+│   │       ├── orders/               order.confirmed → cart CONVERTED
+│   │       ├── database/             migrations: carts + lines
+│   │       └── main.ts               HYBRID: HTTP + RabbitMQ listener
+│   │
+│   └── order/                        INTERNAL · 3005 · inspector 9234
 │       └── src/
-│           ├── inventory/            models, repository, service, controller
-│           │   └── inventory.repository.ts   the atomic reserve statement
-│           ├── database/             migrations: items + ledger
-│           ├── config/
+│           ├── orders/               models, repository, service, controller
+│           ├── cart/                 reads the cart it builds the order from
+│           ├── database/             migrations: orders + items
 │           └── main.ts
 │
 ├── libs/
@@ -180,18 +203,26 @@ ecommerce/
 │   │   └── src/lib/
 │   │       ├── auth/                 register, login, tokens, roles
 │   │       ├── catalog/              product, category, query DTOs
+│   │       ├── inventory/            stock DTOs and movement types
+│   │       ├── cart/                 cart and line DTOs
+│   │       ├── orders/               order DTOs and statuses
+│   │       ├── events/               event patterns and payloads
 │   │       └── common/               pagination envelope
+│   ├── money/                        @ecommerce/money · type:lib
+│   │   └── src/lib/money.ts          exact decimals in integer minor units
 │   └── redis/                        @ecommerce/redis · type:lib
 │       └── src/lib/
 │           ├── redis.module.ts       lazily-connected client, key prefix
 │           └── cache.service.ts      cache-aside, TTL, invalidation
 │
-├── docs/PROJECT-PLAN.md              milestones, progress, deferred items
+├── docs/
+│   ├── PROJECT-PLAN.md               milestones, progress, deferred items
+│   └── SCHEMA.md                     every table, and why it looks like that
 ├── postman/                          collection + local environment
 ├── tools/
 │   ├── free-ports.mjs                kills orphaned dev servers
 │   ├── oversell-demo.mjs             concurrent reservation proof
-│   └── messaging-demo.mjs            publish, duplicate, dead-letter
+│   └── messaging-demo.mjs            an event travelling Product → Cart
 ├── .env.example                      committed template, no real secrets
 ├── .env                              local values, git-ignored
 ├── eslint.config.mjs                 module boundary rules
@@ -257,8 +288,8 @@ both the database and the login role:
 | Auth           | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅     |
 | Product        | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅     |
 | Inventory      | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅     |
-| Cart _(M6)_    | `ecommerce_cart_db`      | `ecommerce_cart_service`      | —      |
-| Order _(M8)_   | `ecommerce_order_db`     | `ecommerce_order_service`     | —      |
+| Cart           | `ecommerce_cart_db`      | `ecommerce_cart_service`      | ✅     |
+| Order          | `ecommerce_order_db`     | `ecommerce_order_service`     | ✅     |
 | Payment _(M9)_ | `ecommerce_payment_db`   | `ecommerce_payment_service`   | —      |
 
 Databases are namespaced per cluster, but **roles in PostgreSQL are
@@ -449,8 +480,9 @@ arrive when there is a second consumer that needs them.
 
 Retry, dead-letter queues, idempotency, a transactional outbox and an event
 envelope are all absent. Each solves a real problem, and each arrives in the
-milestone that meets that problem — see
-[the deferred table](docs/PROJECT-PLAN.md).
+milestone that meets that problem — the outbox and the event envelope in
+**step 2 of Milestone 8**, which exists precisely so the problem comes before
+the mechanism. See [the deferred table](docs/PROJECT-PLAN.md).
 
 Today a failed handler loses its message and a duplicate delivery flags a
 cart line twice. Both are harmless for these events; neither would be once an
@@ -492,6 +524,36 @@ is a better teacher than a page you can only look at.
 | `PATCH`  | `/api/categories/:id` | 200 · updated category          |
 | `DELETE` | `/api/categories/:id` | 204 · soft-deleted              |
 
+### Cart
+
+Every route is authenticated and always operates on **your** cart — there is
+no `:cartId` to tamper with.
+
+| Method   | Path                         | Returns                     |
+| -------- | ---------------------------- | --------------------------- |
+| `GET`    | `/api/cart`                  | 200 · your cart with totals |
+| `POST`   | `/api/cart/items`            | 201 · the whole cart        |
+| `PATCH`  | `/api/cart/items/:productId` | 200 · the whole cart        |
+| `DELETE` | `/api/cart/items/:productId` | 200 · the whole cart        |
+| `DELETE` | `/api/cart`                  | 200 · the emptied cart      |
+
+### Orders
+
+| Method | Path                     | Returns                               |
+| ------ | ------------------------ | ------------------------------------- |
+| `POST` | `/api/orders`            | 201 · the order, built from your cart |
+| `GET`  | `/api/orders`            | 200 · paginated, newest first         |
+| `GET`  | `/api/orders/:id`        | 200 · the order                       |
+| `POST` | `/api/orders/:id/cancel` | 200 · the cancelled order             |
+
+`POST /api/orders` takes an **empty body**. The lines, the prices and the
+owner all come from the server — from the cart, and from the verified token.
+
+This is **step 1 of Milestone 8**, and it is deliberately naive: it does not
+reserve stock, does not empty the cart, and publishes no event. Those are
+real defects you can reproduce in Postman, and each one is fixed in step 2 by
+a named mechanism. See [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md).
+
 ### Listing query parameters
 
 | Parameter               | Values                                 | Notes                                              |
@@ -531,13 +593,13 @@ do money arithmetic.
 
 ### Status codes
 
-| Code      | When                                                                             |
-| --------- | -------------------------------------------------------------------------------- |
-| 400       | Validation failed, unknown property, bad UUID, inverted price range, empty patch |
-| 401       | Missing, expired, tampered token; bad credentials                                |
-| 404       | Product or category not found                                                    |
-| 409       | Email, SKU, category name or slug already in use; category still has products    |
-| 503 / 504 | Downstream service unavailable / timed out                                       |
+| Code      | When                                                                                                                                                    |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400       | Validation failed, unknown property, bad UUID, inverted price range, empty patch                                                                        |
+| 401       | Missing, expired, tampered token; bad credentials                                                                                                       |
+| 404       | Product, category, cart line or order not found                                                                                                         |
+| 409       | Email, SKU, category name or slug in use; category still has products; insufficient stock; cart changed under the customer; order no longer cancellable |
+| 503 / 504 | Downstream service unavailable / timed out                                                                                                              |
 
 ---
 
@@ -547,39 +609,47 @@ Two files in [`postman/`](postman), both committed:
 
 | File                                       | What it is                                 |
 | ------------------------------------------ | ------------------------------------------ |
-| `ecommerce.postman_collection.json`        | Requests, assertions and per-request notes |
+| `ecommerce.postman_collection.json`        | The requests, with a short note on each    |
 | `ecommerce.local.postman_environment.json` | URLs, ports and test credentials           |
 
 **Import both**: Postman → _Import_ → drag both files in. Then select
 **`ecommerce · local`** in the environment picker — a collection-level
 pre-request script fails loudly with a clear message if you forget.
 
-| Folder                      | Contents                                                    |
-| --------------------------- | ----------------------------------------------------------- |
-| `1 · Happy path`            | Register → Login → Me. Chains state, re-runnable.           |
-| `2 · Validation & security` | Seven requests that are _supposed_ to fail.                 |
-| `3 · Auth Service directly` | The same calls on `:3001`, bypassing the gateway.           |
-| `4 · Downstream failure`    | Requires a service stopped on purpose.                      |
-| `5 · Catalogue`             | Category → product → list → filter → sort → patch → delete. |
+| Folder          | Contents                                                      |
+| --------------- | ------------------------------------------------------------- |
+| `1 · Auth`      | Register → login → me. Saves the token the rest of them use.  |
+| `2 · Catalogue` | Category → product → publish → read, filter, patch.           |
+| `3 · Inventory` | Receive, reserve, release, fulfil, adjust, and the ledger.    |
+| `4 · Cart`      | Get or create, add, upsert, set quantity, remove, empty.      |
+| `5 · Orders`    | Place, read, list, cancel — plus what step 1 does not do yet. |
+| `6 · Cleanup`   | Deletes the product. Run last, or not at all.                 |
 
-Every request carries assertions, so **Run collection** doubles as a smoke
-test.
+Requests are plain — **no assertions**, and only three small scripts that
+hand the token and a couple of ids to the requests that follow. The
+assertion-heavy version (deliberately-failing requests, cache and rate-limit
+checks, the messaging walkthrough) was taken out while the order workflow is
+being built, and is in git history if it is wanted back.
+
+Run the folders **top to bottom on a fresh start**: folder 1 saves a token,
+folder 2 saves a product id, and folders 3–5 use them.
 
 ---
 
 ## Everyday commands
 
-| Command                                                  | What it does                                     |
-| -------------------------------------------------------- | ------------------------------------------------ |
-| `npm start`                                              | Serve all three services, with streamed logs     |
-| `npm run start:gateway` / `start:auth` / `start:product` | One service                                      |
-| `npm run stop`                                           | Kill anything left holding 3000–3002 / 9229–9231 |
-| `npm run db:migrate`                                     | Migrate every service's database                 |
-| `npm run build`                                          | Build every project into `dist/`                 |
-| `npm run lint`                                           | ESLint across every project                      |
-| `npm test`                                               | Jest across every project                        |
-| `npm run format`                                         | Rewrite files with Prettier                      |
-| `npm run graph`                                          | Open the interactive Nx project graph            |
+| Command                                                  | What it does                                                      |
+| -------------------------------------------------------- | ----------------------------------------------------------------- |
+| `npm start`                                              | Serve all six services, with streamed logs                        |
+| `npm run start:gateway` / `start:auth` / `start:product` | One service (also `start:inventory`, `start:cart`, `start:order`) |
+| `npm run stop`                                           | Kill anything left holding 3000–3005 / 9229–9234                  |
+| `npm run db:migrate`                                     | Migrate every service's database                                  |
+| `npm run build`                                          | Build every project into `dist/`                                  |
+| `npm run lint`                                           | ESLint across every project                                       |
+| `npm test`                                               | Jest across every project                                         |
+| `npm run format`                                         | Rewrite files with Prettier                                       |
+| `npm run graph`                                          | Open the interactive Nx project graph                             |
+| `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                        |
 
 ---
 
