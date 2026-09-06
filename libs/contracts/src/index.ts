@@ -37,5 +37,8 @@ export * from './lib/cart/cart.dto';
 // --- orders ---
 export * from './lib/orders/order.dto';
 
+// --- payments ---
+export * from './lib/payments/payment.dto';
+
 // --- events ---
 export * from './lib/events/events';

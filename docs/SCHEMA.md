@@ -1,9 +1,9 @@
 # Database Schema
 
-Every table in the system as of **Milestone 8, step 1**, taken from the
+Every table in the system as of **Milestone 9, pass 1**, taken from the
 migrations — the migrations are the source of truth, not this file.
 
-**Five databases, one per service.** No service holds credentials for
+**Six databases, one per service.** No service holds credentials for
 another's database, so "no service reads another service's tables" is a fact
 about the deployment rather than a promise about the code.
 
@@ -13,6 +13,7 @@ ecommerce_product_db     categories · products
 ecommerce_inventory_db   inventory_items · stock_movements
 ecommerce_cart_db        carts · cart_items
 ecommerce_order_db       orders · order_items
+ecommerce_payment_db     payments
 ```
 
 ---
@@ -112,7 +113,7 @@ erDiagram
         varchar_20 order_number UK "ORD-00000001, from a sequence"
         uuid user_id
         uuid cart_id "traceability"
-        varchar_20 status "CONFIRMED | CANCELLED today"
+        varchar_20 status "CONFIRMED | PAID | CANCELLED today"
         varchar_3 currency
         decimal_12_2 subtotal "CHECK >= 0"
         decimal_12_2 total "CHECK >= 0"
@@ -135,6 +136,26 @@ erDiagram
         timestamptz updated_at
     }
 
+    payments {
+        uuid id PK
+        varchar_20 reference UK "PAY-00000001, from a sequence"
+        uuid order_id "one row per ATTEMPT"
+        varchar_20 order_number "snapshot"
+        uuid user_id
+        varchar_20 status "PENDING | SUCCEEDED | DECLINED | FAILED"
+        decimal_12_2 amount "CHECK > 0"
+        varchar_3 currency
+        varchar_64 payment_method_token "provider token, NEVER a card number"
+        varchar_4 card_last4 "CHECK ^[0-9]{4}$"
+        varchar_20 card_brand
+        varchar_64 provider_reference "NULL when the provider never answered"
+        varchar_40 failure_code
+        text failure_message
+        boolean retryable "stored, not derived"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
     categories ||--o{ products : "has"
     inventory_items ||--o{ stock_movements : "explained by"
     carts ||--o{ cart_items : "contains"
@@ -146,6 +167,8 @@ erDiagram
     products ||..o{ cart_items : "product_id, no FK"
     products ||..o{ order_items : "product_id, no FK"
     carts ||..o{ orders : "cart_id, no FK"
+    orders ||..o{ payments : "order_id, no FK"
+    users ||..o{ payments : "user_id, no FK"
 ```
 
 ---
@@ -284,6 +307,57 @@ and still races.
 
 ---
 
+### `ecommerce_payment_db`
+
+```text
+payment_reference_seq  (sequence)
+        │
+        ▼
+payments                       ONE ROW PER ATTEMPT, not per order
+  id                    uuid PK
+  reference             varchar(20)  UNIQUE, 'PAY-' || lpad(nextval(...))
+  order_id              uuid         ── no FK, another database
+  order_number          varchar(20)  snapshot, so a payment reads alone
+  user_id               uuid
+  status                varchar(20)  CHECK IN (PENDING, SUCCEEDED,
+                                               DECLINED, FAILED)
+  amount                decimal(12,2)  CHECK > 0
+  currency              varchar(3)
+  payment_method_token  varchar(64)  the PROVIDER's token for the card
+  card_last4            varchar(4)   CHECK ^[0-9]{4}$
+  card_brand            varchar(20)
+  provider_reference    varchar(64)  NULL when there was no answer at all
+  failure_code          varchar(40)
+  failure_message       text
+  retryable             boolean
+  created_at            timestamptz
+  updated_at            timestamptz
+```
+
+**What this table must never contain**: a card number, a CVV, an expiry date,
+a cardholder name. It stores a token the provider issued after its own SDK
+collected the card in the customer's browser, plus a last-4 and a brand for
+display. A `card_number` column would drag every server, log file, backup and
+database dump into PCI scope — and once real card numbers have been written,
+they are in the backups.
+
+`card_last4 varchar(4)` with a four-digit CHECK is deliberate belt and
+braces: a column that _could_ hold sixteen characters is a column that
+eventually will.
+
+**Missing on purpose, until pass 2 of M9:**
+
+```sql
+CREATE UNIQUE INDEX payments_one_success_per_order
+  ON payments (order_id) WHERE status = 'SUCCEEDED';
+```
+
+Without it, one order can have two successful payments — the customer is
+charged twice. It is left out so the double charge can be reproduced once,
+deliberately, before the fix is added.
+
+---
+
 ## Things worth noticing across the whole schema
 
 **Money is `DECIMAL(12,2)`, never `FLOAT`, and crosses the wire as a string.**
@@ -311,18 +385,20 @@ to enforce RESTRICT.
 
 ---
 
-## What step 2 of Milestone 8 adds
+## What pass 2 of Milestone 9 adds
 
-Two more tables in `ecommerce_order_db`, and neither describes an order:
+No new tables — two additions to `payments`:
 
 ```text
-order_saga_steps   which step of the checkout workflow ran, and whether it
-                   was undone. Answers "did we give the stock back?"
+idempotency_key        varchar, with UNIQUE (user_id, idempotency_key)
+                       so a retried charge returns the FIRST payment's answer
 
-outbox_messages    events waiting to be published, written in the SAME
-                   transaction as the order they describe
+payments_one_success_per_order
+                       UNIQUE (order_id) WHERE status = 'SUCCEEDED'
+                       so one order can never have two successful charges
 ```
 
-Plus `orders.idempotency_key`, with a partial unique index on
-`(user_id, idempotency_key)`, so a retried checkout returns the first order
-instead of creating a second.
+The two are not the same thing, and that is the lesson: the index **refuses**
+the second charge, while the key **returns the original answer** — which is
+what a client that does not know whether its first request landed actually
+needs.

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/microservices';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { CartClientModule } from '../cart/cart-client.module';
+import { PaymentEventsController } from '../payments/payment-events.controller';
 import type { OrderEnv } from '../config/env.validation';
 import { OrderItem } from './order-item.model';
 import { Order } from './order.model';
@@ -52,7 +53,9 @@ import { OrdersService } from './orders.service';
       },
     ]),
   ],
-  controllers: [OrdersController],
+  // TWO controllers: HTTP, and the payment events that move an order to
+  // PAID. Same class shape, different decorator on the handlers.
+  controllers: [OrdersController, PaymentEventsController],
   providers: [OrdersService, OrdersRepository],
 })
 export class OrdersModule {}

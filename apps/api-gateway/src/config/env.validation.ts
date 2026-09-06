@@ -22,7 +22,9 @@ export interface GatewayEnv {
   INVENTORY_SERVICE_URL: string;
   CART_SERVICE_URL: string;
   ORDER_SERVICE_URL: string;
+  PAYMENT_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
+  PAYMENT_GATEWAY_TIMEOUT_MS: number;
 
   REDIS_URL: string;
   RATE_LIMIT_LIMIT: number;
@@ -51,6 +53,8 @@ export const gatewayEnvSchema = Joi.object({
 
   ORDER_SERVICE_URL: Joi.string().uri().required(),
 
+  PAYMENT_SERVICE_URL: Joi.string().uri().required(),
+
   // Every outbound call needs a deadline. Without one, a hung downstream
   // service holds a gateway request open indefinitely; enough of those and the
   // gateway exhausts its own resources and stops serving healthy routes too.
@@ -60,6 +64,17 @@ export const gatewayEnvSchema = Joi.object({
     .min(100)
     .max(30_000)
     .default(5_000),
+
+  // Payments get their own, longer deadline. A charge takes seconds, and
+  // abandoning one does not cancel it — it leaves a customer who may have
+  // been charged and a gateway that has already answered 504. This must stay
+  // LONGER than the Payment Service's own provider timeout, or the outer
+  // deadline fires first and the inner one never gets to do its job.
+  PAYMENT_GATEWAY_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1_000)
+    .max(120_000)
+    .default(20_000),
 
   // Required, unlike the cache. Rate limiting needs ONE counter shared by
   // every gateway replica — an in-memory counter means three replicas each

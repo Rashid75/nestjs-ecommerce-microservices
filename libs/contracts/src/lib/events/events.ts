@@ -28,6 +28,9 @@ export const EventPattern = {
 
   OrderConfirmed: 'order.confirmed',
   OrderCancelled: 'order.cancelled',
+
+  PaymentSucceeded: 'payment.succeeded',
+  PaymentFailed: 'payment.failed',
 } as const;
 
 export type EventPatternValue =
@@ -139,4 +142,40 @@ export interface OrderCancelledPayload {
   orderNumber: string;
   userId: string;
   reason: string;
+}
+
+/**
+ * Money was taken for an order.
+ *
+ * The Order Service consumes this and moves the order to PAID. It does not
+ * poll the Payment Service and the Payment Service does not write orders —
+ * each owns its own database, so the only thing that crosses is a fact.
+ */
+export interface PaymentSucceededPayload {
+  paymentId: string;
+  reference: string;
+  orderId: string;
+  userId: string;
+  amount: string;
+  currency: string;
+  /** The provider's id for the charge, for reconciliation. */
+  providerReference: string;
+}
+
+/**
+ * An attempt to take money did not succeed.
+ *
+ * `retryable` is the field that matters. A DECLINED card will decline again;
+ * a provider timeout might not. Anything reacting to this — a dunning email,
+ * an alert, an automatic retry — needs to know which it was.
+ */
+export interface PaymentFailedPayload {
+  paymentId: string;
+  reference: string;
+  orderId: string;
+  userId: string;
+  amount: string;
+  currency: string;
+  failureCode: string;
+  retryable: boolean;
 }

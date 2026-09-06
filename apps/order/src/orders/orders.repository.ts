@@ -192,6 +192,37 @@ export class OrdersRepository {
     return affected > 0;
   }
 
+  /**
+   * CONFIRMED → PAID, driven by the `payment.succeeded` event.
+   *
+   * NOT scoped by user, unlike every other method here — the caller is the
+   * message handler, not a customer, and there is no request to take an
+   * identity from. The payload names the order, and the Payment Service
+   * already checked ownership before it charged anyone.
+   *
+   * IDEMPOTENT BY CONSTRUCTION: `WHERE status = 'CONFIRMED'` means a
+   * duplicate delivery updates nothing. RabbitMQ delivers at-least-once, so
+   * this WILL be called twice for the same payment, and the second call
+   * must be a no-op rather than a mistake.
+   *
+   * It is also the guard against a genuinely bad outcome: an order that was
+   * cancelled between confirmation and payment cannot be quietly marked
+   * PAID. `false` comes back, the handler logs it loudly, and a human has a
+   * refund to arrange.
+   */
+  async markPaid(orderId: string): Promise<boolean> {
+    const [affected] = await this.orders.update(
+      { status: OrderStatus.Paid },
+      { where: { id: orderId, status: OrderStatus.Confirmed } },
+    );
+    return affected > 0;
+  }
+
+  /** Read by the message handler, which has no user to scope by. */
+  async findAny(orderId: string): Promise<OrderRecord | null> {
+    return this.findById(orderId);
+  }
+
   private async findById(orderId: string): Promise<OrderRecord | null> {
     const order = await this.orders.findOne({
       where: { id: orderId },

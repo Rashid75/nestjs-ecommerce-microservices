@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "nx run-many -t serve -p api-gateway auth product inventory cart order --output-style=stream",
+    "start": "nx run-many -t serve -p api-gateway auth product inventory cart order payment --output-style=stream",
     "start:gateway": "nx serve api-gateway",
     "start:auth": "nx serve auth",
     "start:product": "nx serve product",
@@ -22,7 +22,7 @@
     "product:migrate:undo": "nx run product:migrate:undo",
     "product:migrate:status": "nx run product:migrate:status",
     "product:migration:generate": "nx run product:migration:generate --",
-    "db:migrate": "nx run-many -t migrate -p auth product inventory cart order",
+    "db:migrate": "nx run-many -t migrate -p auth product inventory cart order payment",
     "start:inventory": "nx serve inventory",
     "inventory:migrate": "nx run inventory:migrate",
     "inventory:migrate:undo": "nx run inventory:migrate:undo",
@@ -35,7 +35,11 @@
     "start:order": "nx serve order",
     "order:migrate": "nx run order:migrate",
     "order:migrate:undo": "nx run order:migrate:undo",
-    "order:migrate:status": "nx run order:migrate:status"
+    "order:migrate:status": "nx run order:migrate:status",
+    "start:payment": "nx serve payment",
+    "payment:migrate": "nx run payment:migrate",
+    "payment:migrate:undo": "nx run payment:migrate:undo",
+    "payment:migrate:status": "nx run payment:migrate:status"
   },
   "private": true,
   "dependencies": {

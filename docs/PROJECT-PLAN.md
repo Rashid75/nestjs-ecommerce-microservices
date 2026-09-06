@@ -8,17 +8,17 @@ every milestone — completed work moves from _Planned_ to _Delivered_, and
 anything deliberately deferred is recorded with the **trigger** that should
 bring it back, rather than a vague "later".
 
-|                         |                                                |
-| ----------------------- | ---------------------------------------------- |
-| **Milestones complete** | 8 of 15                                        |
-| **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order |
-| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3             |
-| **Databases**           | one per service, five in total                 |
-| **Next milestone**      | 9 — Payment Service                            |
+|                         |                                                         |
+| ----------------------- | ------------------------------------------------------- |
+| **Milestones complete** | 8 of 15, plus pass 1 of milestone 9                     |
+| **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment |
+| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                      |
+| **Databases**           | one per service, six in total                           |
+| **Next**                | **M9 pass 2** — idempotency keys, duplicate charges     |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ░░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
+M9 ▓░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░   ← M9 pass 1 of 2
 ```
 
 ---
@@ -68,10 +68,13 @@ This is a **learning project**. The rules it runs under:
 ecommerce_ ecommerce_ ecommerce_  ecommerce_  ecommerce_
  auth_db   product_db inventory_db  cart_db     order_db
 
-Checkout, one request:
-   Order ──GET /cart──────────────► Cart          read, nothing to undo
-   Order ──write order + items────► its own DB    one local transaction
-   Order ──order.confirmed────────► RabbitMQ      the cart converts itself
+Checkout, then payment — two separate calls, each retryable on its own:
+   Order   ──GET /cart──────────────► Cart        read, nothing to undo
+   Order   ──write order + items────► its own DB  one local transaction
+   Order   ──order.confirmed────────► RabbitMQ    the cart converts itself
+   Payment ──GET /orders/:id────────► Order       amount + ownership
+   Payment ──charge──────────────────► provider   approved · declined · ?
+   Payment ──payment.succeeded──────► RabbitMQ    the order marks itself PAID
    No stock is reserved — see the deferred table.
 
 RabbitMQ :5672   ecommerce_events queue
@@ -79,7 +82,9 @@ RabbitMQ :5672   ecommerce_events queue
    Product   → product.price_changed · product.archived
    Inventory → inventory.reserved · inventory.released
    Order     → order.confirmed · order.cancelled
-   Cart      ← consumes the catalogue events AND order.confirmed
+   Payment   → payment.succeeded · payment.failed
+   Cart      ← the catalogue events AND order.confirmed
+   Order     ← payment.succeeded (hybrid app since M9)
 
 Redis :6379   ecom:gateway:*  rate-limit counters + token introspection
               ecom:product:*  cache-aside entries (optional, fails open)
@@ -537,10 +542,82 @@ commit choice accepts.
 
 ---
 
-## ⬜ Milestone 9 — Payment Service
+## 🟡 Milestone 9 — Payment Service
 
-**Next up.** A realistic mock provider: success, decline, timeout, duplicate request,
-provider unavailable. Idempotency keys, retryable vs non-retryable errors.
+**Pass 1 complete.** Split the same way as M8: the plain version first, then
+the machinery that fixes what it visibly gets wrong.
+
+### The flow
+
+```text
+POST /api/payments { orderId, paymentMethodToken }
+   │
+   1  GET order:3005 /orders/:id     amount + ownership, server-side
+   2  write payment PENDING          BEFORE calling out
+   3  charge the mock provider       approved · declined · no answer
+   4  settle the row + publish       payment.succeeded / payment.failed
+                                          │
+                                          ▼
+                        Order Service consumes it: CONFIRMED → PAID
+```
+
+### Delivered
+
+**Payment Service** (`:3006`, `ecommerce_payment_db`, inspector 9235)
+
+- One table, `payments` — **one row per attempt**, not per order. A declined
+  attempt followed by a successful one leaves two rows, and both matter
+- `reference` from a PostgreSQL sequence (`PAY-00000001`)
+- `POST /payments`, `GET /payments`, `GET /payments/:id`
+- **The amount is never in the request.** It is read from the order, which
+  read it from the cart, which read it from the catalogue
+- Ownership is enforced by forwarding `X-User-Id` to the Order Service, so
+  paying for a stranger's order fails on the same 404 that stops reading it
+
+**The mock provider** — six test tokens, modelled on real test cards:
+
+| Token             | What happens                            |
+| ----------------- | --------------------------------------- |
+| `tok_ok`          | approved                                |
+| `tok_declined`    | declined — insufficient funds           |
+| `tok_fraud`       | declined — suspected fraud              |
+| `tok_timeout`     | takes 30s, so the deadline really fires |
+| `tok_unavailable` | provider is down                        |
+| `tok_flaky`       | fails about half the time               |
+
+**The Order Service is now a hybrid application** — HTTP plus a RabbitMQ
+listener, like the Cart Service. It consumes `payment.succeeded` and moves
+the order CONFIRMED → PAID with a conditional UPDATE, so a duplicate delivery
+is a no-op and a cancelled order can never be quietly marked paid.
+
+### Key decisions
+
+| Decision                                              | Why                                                                                                                                                                                            |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tokens, never card data**                           | The schema has no `card_number`, no CVV, no expiry — only a provider token, a last-4 and a brand. Data you never hold cannot leak, and it is what keeps this service outside PCI scope.        |
+| **A separate `POST /payments`**, not part of checkout | Charging inside `POST /orders` means an order that must be undone when the charge fails — a compensating workflow. Two calls keep each step individually retryable.                            |
+| **Write PENDING before calling the provider**         | A process that dies mid-charge must still leave a row saying "we asked". Writing afterwards means a customer can be charged with no record that anything was attempted.                        |
+| **402 vs 503** — declined vs no answer                | A decline is a decision: retrying is pointless and costs the customer a queue of failed attempts on their statement. A timeout is an absence of information: retrying is the correct response. |
+| **`retryable` is stored, not derived**                | A judgement about a past event must not change because the rules changed afterwards.                                                                                                           |
+| **A timeout records FAILED, never "declined"**        | The outcome is genuinely UNKNOWN — the provider kept working after we stopped waiting. Calling that a decline would be a guess presented as a fact.                                            |
+| **The gateway gets its own, longer deadline**         | 20s, against the service's 10s provider deadline. If the outer timeout fires first, the inner one never gets to do its job and the customer sees a 504 for a charge that was still in flight.  |
+| **A failed payment leaves the order CONFIRMED**       | The commonest thing after a decline is paying with another card. Ending the order because one card was refused would take that away.                                                           |
+
+### Deliberately NOT built — pass 2
+
+| Not built                                          | The failure it answers                                                                                                                                                      |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`Idempotency-Key` on `POST /payments`**          | Send the same request twice and you get two payments. If both succeed the customer is charged twice — reproducible in one click.                                            |
+| **`UNIQUE (order_id) WHERE status = 'SUCCEEDED'`** | The database currently permits two successful payments for one order. The index refuses the second; the key returns the first one's answer, and those are different things. |
+| **Automatic retry of a retryable failure**         | The API says whether a retry is worth making. Nothing makes it.                                                                                                             |
+| **Reconciliation of stuck PENDING rows**           | A payment whose provider never answered stays PENDING forever, and nobody is told.                                                                                          |
+| **Refunds**                                        | A refund is a separate signed record, not a deleted payment. It needs its own endpoint, event and order transition.                                                         |
+
+### Verified
+
+104 unit tests across ten projects; all seven services build and lint. With
+RabbitMQ stopped, a payment still succeeds and is recorded — only the order's
+move to PAID waits for the broker.
 
 ---
 
@@ -660,7 +737,7 @@ readable on a server shared with other projects.
 | Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅ created, migrated |
 | Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | ✅ created, migrated |
 | Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | ⏳ migration written |
-| Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | M9                   |
+| Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | ⏳ migration written |
 
 ## Port inventory
 
@@ -672,7 +749,8 @@ readable on a server shared with other projects.
 | Inventory        | 3003 | 9232           |
 | Cart             | 3004 | 9233           |
 | Order            | 3005 | 9234           |
-| _(next service)_ | 3006 | 9235           |
+| Payment          | 3006 | 9235           |
+| _(next service)_ | 3007 | 9236           |
 
 Each service needs its own inspector port. `@nx/js:node` defaults every one of
 them to 9229, and the collision stops the second service booting with an error

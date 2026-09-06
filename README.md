@@ -4,10 +4,12 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 7 — RabbitMQ Messaging.**
-> Five services talking both synchronously (HTTP) and asynchronously
-> (RabbitMQ topic exchange, with retries, dead-lettering and idempotent
-> consumers). No orders or payments yet.
+> **Current status: Milestone 9 — Payment Service (pass 1).**
+> Seven services talking synchronously over HTTP and asynchronously over
+> RabbitMQ. A customer can register, browse, fill a cart, place an order and
+> pay for it against a mock provider. Stock is not yet reserved at checkout,
+> and a payment can still be sent twice — both deliberate, both recorded
+> with their triggers in the plan.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -47,27 +49,31 @@ item back.
 │  API Gateway :3000   │  public · /api · DTO validation · auth guard · routing
 └──────────┬───────────┘
            │ HTTP (axios, 5s timeout, honest failure mapping, X-User-Id)
-   ┌───────┼─────────┬───────────┬──────────┐
-   ▼       ▼         ▼           ▼          ▼
-┌──────┐┌───────┐┌───────────┐┌────────┐┌─────────────┐
-│Auth  ││Product││Inventory  ││Cart    ││Order :3005  │  all 127.0.0.1
-│:3001 ││:3002  ││:3003      ││:3004   ││orders       │
-└──┬───┘└───┬───┘└─────┬─────┘└───┬────┘└──────┬──────┘
-   │        │          │          │            │  Sequelize, one layer only
-   ▼        ▼          ▼          ▼            ▼
-ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_
- auth_db   product_db inventory_db cart_db   order_db
+   ┌───────┼─────────┬───────────┬──────────┬────────────┐
+   ▼       ▼         ▼           ▼          ▼            ▼
+┌──────┐┌───────┐┌───────────┐┌────────┐┌──────────┐┌──────────┐
+│Auth  ││Product││Inventory  ││Cart    ││Order     ││Payment   │ 127.0.0.1
+│:3001 ││:3002  ││:3003      ││:3004   ││:3005     ││:3006     │
+└──┬───┘└───┬───┘└─────┬─────┘└───┬────┘└────┬─────┘└────┬─────┘
+   │        │          │          │          │           │ one layer only
+   ▼        ▼          ▼          ▼          ▼           ▼
+ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_
+ auth_db   product_db inventory_db cart_db   order_db  payment_db
                           schema from migrations only
 
-Checkout: read the cart → write the order and its lines in ONE local
-   transaction → publish order.confirmed → the Cart Service converts that
-   cart when it hears about it. No stock is reserved yet — reserving needs
-   an undo, and that workflow is deferred with a trigger written down.
+Checkout and payment are two calls, each retryable on its own:
+   POST /orders   read cart → write order + lines in ONE transaction →
+                  order.confirmed → the Cart Service converts that cart
+   POST /payments read the order's amount → write PENDING → charge the
+                  provider → payment.succeeded → the order marks itself PAID
+   No stock is reserved yet — reserving needs an undo, and that workflow is
+   deferred with a trigger written down.
 
            RabbitMQ :5672  ·  queue ecommerce_events
   user.registered · product.price_changed · product.archived
   inventory.reserved · inventory.released
   order.confirmed · order.cancelled
+  payment.succeeded · payment.failed
 
            Redis :6379
   ecom:gateway:*   rate-limit counters   REQUIRED by the gateway
@@ -192,12 +198,21 @@ ecommerce/
 │   │       ├── database/             migrations: carts + lines
 │   │       └── main.ts               HYBRID: HTTP + RabbitMQ listener
 │   │
-│   └── order/                        INTERNAL · 3005 · inspector 9234
+│   ├── order/                        INTERNAL · 3005 · inspector 9234
+│   │   └── src/
+│   │       ├── orders/               models, repository, service, controller
+│   │       │                         publishes order.confirmed / .cancelled
+│   │       ├── cart/                 reads the cart it builds the order from
+│   │       ├── payments/             payment.succeeded → order PAID
+│   │       ├── database/             migrations: orders + items
+│   │       └── main.ts               HYBRID: HTTP + RabbitMQ listener
+│   │
+│   └── payment/                      INTERNAL · 3006 · inspector 9235
 │       └── src/
-│           ├── orders/               models, repository, service, controller
-│           │                         publishes order.confirmed / .cancelled
-│           ├── cart/                 reads the cart it builds the order from
-│           ├── database/             migrations: orders + items
+│           ├── payments/             model, repository, service, controller
+│           ├── provider/             the mock provider and its test tokens
+│           ├── orders/               reads the amount it is allowed to charge
+│           ├── database/             migrations: payments
 │           └── main.ts
 │
 ├── libs/
@@ -208,6 +223,7 @@ ecommerce/
 │   │       ├── inventory/            stock DTOs and movement types
 │   │       ├── cart/                 cart and line DTOs
 │   │       ├── orders/               order DTOs and statuses
+│   │       ├── payments/             payment DTOs, statuses, test tokens
 │   │       ├── events/               event patterns and payloads
 │   │       └── common/               pagination envelope
 │   ├── money/                        @ecommerce/money · type:lib
@@ -285,14 +301,14 @@ npm start
 Every PostgreSQL object this project creates is prefixed **`ecommerce_`** —
 both the database and the login role:
 
-| Service        | Database                 | Owning role                   | Status |
-| -------------- | ------------------------ | ----------------------------- | ------ |
-| Auth           | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅     |
-| Product        | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅     |
-| Inventory      | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅     |
-| Cart           | `ecommerce_cart_db`      | `ecommerce_cart_service`      | ✅     |
-| Order          | `ecommerce_order_db`     | `ecommerce_order_service`     | ✅     |
-| Payment _(M9)_ | `ecommerce_payment_db`   | `ecommerce_payment_service`   | —      |
+| Service   | Database                 | Owning role                   | Status |
+| --------- | ------------------------ | ----------------------------- | ------ |
+| Auth      | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅     |
+| Product   | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅     |
+| Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅     |
+| Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | ✅     |
+| Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | ✅     |
+| Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | ✅     |
 
 Databases are namespaced per cluster, but **roles in PostgreSQL are
 cluster-wide**. A bare `auth_service` would share a namespace with every other
@@ -599,6 +615,31 @@ not instantly. **Stock is still not reserved at checkout**, which is a real
 gap recorded with its trigger in
 [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md).
 
+### Payments
+
+| Method | Path                | Returns                                                     |
+| ------ | ------------------- | ----------------------------------------------------------- |
+| `POST` | `/api/payments`     | 201 · the payment · 402 declined · 503 provider unreachable |
+| `GET`  | `/api/payments`     | 200 · paginated, newest first                               |
+| `GET`  | `/api/payments/:id` | 200 · one payment                                           |
+
+```json
+POST /api/payments
+{ "orderId": "…", "paymentMethodToken": "tok_ok" }
+```
+
+**No card number, no CVV, no amount.** The amount comes from the order; the
+card comes from a provider token. The test tokens are `tok_ok`,
+`tok_declined`, `tok_fraud`, `tok_timeout`, `tok_unavailable` and
+`tok_flaky` — see `libs/contracts/src/lib/payments/payment.dto.ts`.
+
+**402 vs 503** is the distinction worth learning here. A 402 means the card
+was declined: the request was fine, and retrying it identically will fail
+identically. A 503 means we never got an answer, the outcome is genuinely
+unknown, and a retry is the right response — the body carries `retryable` so
+a client does not have to keep its own table of which codes are worth
+repeating.
+
 ### Listing query parameters
 
 | Parameter               | Values                                 | Notes                                              |
@@ -683,18 +724,18 @@ folder 2 saves a product id, and folders 3–5 use them.
 
 ## Everyday commands
 
-| Command                                                  | What it does                                                      |
-| -------------------------------------------------------- | ----------------------------------------------------------------- |
-| `npm start`                                              | Serve all six services, with streamed logs                        |
-| `npm run start:gateway` / `start:auth` / `start:product` | One service (also `start:inventory`, `start:cart`, `start:order`) |
-| `npm run stop`                                           | Kill anything left holding 3000–3005 / 9229–9234                  |
-| `npm run db:migrate`                                     | Migrate every service's database                                  |
-| `npm run build`                                          | Build every project into `dist/`                                  |
-| `npm run lint`                                           | ESLint across every project                                       |
-| `npm test`                                               | Jest across every project                                         |
-| `npm run format`                                         | Rewrite files with Prettier                                       |
-| `npm run graph`                                          | Open the interactive Nx project graph                             |
-| `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                        |
+| Command                                                  | What it does                                                                       |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `npm start`                                              | Serve all seven services, with streamed logs                                       |
+| `npm run start:gateway` / `start:auth` / `start:product` | One service (also `start:inventory`, `start:cart`, `start:order`, `start:payment`) |
+| `npm run stop`                                           | Kill anything left holding 3000–3006 / 9229–9235                                   |
+| `npm run db:migrate`                                     | Migrate every service's database                                                   |
+| `npm run build`                                          | Build every project into `dist/`                                                   |
+| `npm run lint`                                           | ESLint across every project                                                        |
+| `npm test`                                               | Jest across every project                                                          |
+| `npm run format`                                         | Rewrite files with Prettier                                                        |
+| `npm run graph`                                          | Open the interactive Nx project graph                                              |
+| `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                                         |
 
 ---
 

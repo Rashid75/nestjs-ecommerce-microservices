@@ -1,0 +1,111 @@
+{
+  "name": "payment",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/payment/src",
+  "projectType": "application",
+  "tags": ["type:app", "scope:payment"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "webpack-cli build",
+        "env": {
+          "NODE_ENV": "production"
+        },
+        "cwd": "apps/payment"
+      },
+      "configurations": {
+        "development": {
+          "env": {
+            "NODE_ENV": "development"
+          }
+        }
+      }
+    },
+    "prune-lockfile": {
+      "dependsOn": ["build"],
+      "cache": true,
+      "executor": "@nx/js:prune-lockfile",
+      "outputs": [
+        "{workspaceRoot}/dist/apps/payment/package.json",
+        "{workspaceRoot}/dist/apps/payment/package-lock.json"
+      ],
+      "options": {
+        "buildTarget": "build"
+      }
+    },
+    "copy-workspace-modules": {
+      "dependsOn": ["build"],
+      "cache": true,
+      "outputs": ["{workspaceRoot}/dist/apps/payment/workspace_modules"],
+      "executor": "@nx/js:copy-workspace-modules",
+      "options": {
+        "buildTarget": "build"
+      }
+    },
+    "prune": {
+      "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
+      "executor": "nx:noop"
+    },
+    "serve": {
+      "continuous": true,
+      "executor": "@nx/js:node",
+      "defaultConfiguration": "development",
+      "dependsOn": ["build"],
+      "options": {
+        "buildTarget": "payment:build",
+        "runBuildTargetDependencies": false,
+        "port": 9235
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "payment:build:development"
+        },
+        "production": {
+          "buildTarget": "payment:build:production"
+        }
+      }
+    },
+    "test": {
+      "options": {
+        "passWithNoTests": true
+      }
+    },
+    "migrate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/payment",
+        "command": "sequelize-cli db:migrate",
+        "forwardAllArgs": true
+      }
+    },
+    "migrate:undo": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/payment",
+        "command": "sequelize-cli db:migrate:undo",
+        "forwardAllArgs": true
+      }
+    },
+    "migrate:status": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/payment",
+        "command": "sequelize-cli db:migrate:status",
+        "forwardAllArgs": true
+      }
+    },
+    "migration:generate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/payment",
+        "command": "sequelize-cli migration:generate",
+        "forwardAllArgs": true
+      }
+    }
+  }
+}

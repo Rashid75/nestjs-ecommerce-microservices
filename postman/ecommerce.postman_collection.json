@@ -1008,7 +1008,392 @@
       ]
     },
     {
-      "name": "6 · Cleanup",
+      "name": "6 · Payments",
+      "description": "Milestone 9, pass 1. Paying is a **separate call** from checkout, so each is retryable on its own.\n\n`POST /payments` sends an `orderId` and a `paymentMethodToken` — never a card number, never an amount. The amount is read from the order server-side; the card was tokenised by the provider before it ever reached us.\n\nThe tokens force an outcome, the way every provider test card does:\n\n| Token | Outcome |\n| --- | --- |\n| `tok_ok` | approved |\n| `tok_declined` | declined — insufficient funds |\n| `tok_fraud` | declined — suspected fraud |\n| `tok_timeout` | no answer at all (takes ~10s) |\n| `tok_unavailable` | provider is down |\n| `tok_flaky` | fails about half the time |\n\nRun folder `5 · Orders` first — this one pays for the order it left behind. The last request shows a gap that is still open.",
+      "item": [
+        {
+          "name": "Place an order to pay for",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.environment.set('orderId', b.id);",
+                  "pm.environment.set('orderNumber', b.orderNumber);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders"]
+            },
+            "description": "Folder 5 cancels its order at the end, so this makes a fresh CONFIRMED one. Add something to the cart first if it is empty."
+          }
+        },
+        {
+          "name": "Pay — approved",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.environment.set('paymentId', b.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "201. Note what comes back: a `reference` you could read down a phone, the provider own `providerReference`, a last-4 and a brand — and **not** the token you sent. Anything echoed back ends up in a log."
+          }
+        },
+        {
+          "name": "The order is now PAID (give it a second)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders", "{{orderId}}"]
+            },
+            "description": "`payment.succeeded` travelled over RabbitMQ and the Order Service moved the order CONFIRMED to PAID itself. Not instant — if it still says CONFIRMED, re-send. No service writes another service database."
+          }
+        },
+        {
+          "name": "GET /payments/:id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments/{{paymentId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments", "{{paymentId}}"]
+            }
+          }
+        },
+        {
+          "name": "GET /payments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Yours only, newest first — including the failures. One row per ATTEMPT, which is what support needs when a customer phones about a card that was refused."
+          }
+        },
+        {
+          "name": "Pay a PAID order again — 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "The Payment Service reads the order first and finds it is no longer awaiting payment. This is the check that catches a stale checkout page — but note it is a *check*, not a constraint, and the last request in this folder shows why that matters."
+          }
+        },
+        {
+          "name": "Place another order (for the failure cases)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.environment.set('orderId', b.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders"]
+            },
+            "description": "Add items to the cart first if it is empty — folder 4, or the first request of folder 5."
+          }
+        },
+        {
+          "name": "Pay — declined (402)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_declined\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "**402 Payment Required**, and `retryable: false`.\n\nNot 400 — the request was perfectly well formed. Not 500 — nothing broke. Not 503 — sending it again produces the same refusal, and each attempt is a line on the customer statement.\n\nThe attempt is still recorded, with the provider reference, because that is what support quotes on the phone."
+          }
+        },
+        {
+          "name": "Pay — provider down (503)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_unavailable\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "**503**, and `retryable: true`. We never got an answer, so the outcome is UNKNOWN — the charge may be settling right now. The row is FAILED with a NULL `providerReference`, which is exactly the case where you most want one."
+          }
+        },
+        {
+          "name": "Pay — no answer at all (takes ~10s)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_timeout\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "The provider takes 30 seconds; the deadline is 10. Watch the clock in Postman — this is the failure that makes idempotency keys necessary, because a client that times out does not know whether it was charged."
+          }
+        },
+        {
+          "name": "A card number is refused at the edge — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"cardNumber\": \"4242424242424242\",\n  \"cvv\": \"123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "`forbidNonWhitelisted` rejects it at the gateway, one hop before it could reach a log. A field that is silently ignored is a field somebody will eventually assume is being used."
+          }
+        },
+        {
+          "name": "⚠ Pay a fresh order TWICE — still open",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "**Not a bug to report — the thing to notice.**\n\nSend this twice in quick succession, before the `payment.succeeded` event has moved the order to PAID. Two payments, two charges, one order.\n\nPass 2 adds two different fixes: a unique index that REFUSES the second successful payment, and an `Idempotency-Key` that RETURNS THE FIRST ONE ANSWER. A client retrying after a timeout needs the second, not the first."
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 · Cleanup",
       "description": "Run last, or not at all. Deleting the product makes the Inventory, Cart and Orders folders fail until the Catalogue folder is run again.",
       "item": [
         {
