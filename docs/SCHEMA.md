@@ -1,6 +1,6 @@
 # Database Schema
 
-Every table in the system as of **Milestone 9, pass 1**, taken from the
+Every table in the system as of **Milestone 9**, taken from the
 migrations — the migrations are the source of truth, not this file.
 
 **Six databases, one per service.** No service holds credentials for
@@ -152,6 +152,7 @@ erDiagram
         varchar_40 failure_code
         text failure_message
         boolean retryable "stored, not derived"
+        varchar_100 idempotency_key "UNIQUE per user, when sent"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -330,8 +331,11 @@ payments                       ONE ROW PER ATTEMPT, not per order
   failure_code          varchar(40)
   failure_message       text
   retryable             boolean
-  created_at            timestamptz
-  updated_at            timestamptz
+  idempotency_key       varchar(100) ─┐ UNIQUE (user_id, idempotency_key)
+  created_at            timestamptz   │ WHERE idempotency_key IS NOT NULL
+  updated_at            timestamptz  ─┘
+
+  UNIQUE (order_id) WHERE status IN ('PENDING', 'SUCCEEDED')
 ```
 
 **What this table must never contain**: a card number, a CVV, an expiry date,
@@ -345,16 +349,17 @@ they are in the backups.
 braces: a column that _could_ hold sixteen characters is a column that
 eventually will.
 
-**Missing on purpose, until pass 2 of M9:**
+**Two indexes, two different problems.** `payments_one_active_per_order`
+refuses a second payment while one is in flight or has succeeded — at INSERT
+time, before the provider is called, so nothing is charged.
+`payments_user_idempotency_key` refuses nothing: it lets the service find the
+first attempt and replay its answer, which is what a client that never found
+out what happened actually needs.
 
-```sql
-CREATE UNIQUE INDEX payments_one_success_per_order
-  ON payments (order_id) WHERE status = 'SUCCEEDED';
-```
-
-Without it, one order can have two successful payments — the customer is
-charged twice. It is left out so the double charge can be reproduced once,
-deliberately, before the fix is added.
+PENDING is in the first index on purpose. A payment whose outcome is unknown
+must block another attempt, because the provider may still be settling it.
+The cost is that a stuck PENDING blocks its order until a human intervenes —
+the right failure, and the trigger for the reconciliation job.
 
 ---
 
@@ -385,20 +390,9 @@ to enforce RESTRICT.
 
 ---
 
-## What pass 2 of Milestone 9 adds
+## Still to come
 
-No new tables — two additions to `payments`:
-
-```text
-idempotency_key        varchar, with UNIQUE (user_id, idempotency_key)
-                       so a retried charge returns the FIRST payment's answer
-
-payments_one_success_per_order
-                       UNIQUE (order_id) WHERE status = 'SUCCEEDED'
-                       so one order can never have two successful charges
-```
-
-The two are not the same thing, and that is the lesson: the index **refuses**
-the second charge, while the key **returns the original answer** — which is
-what a client that does not know whether its first request landed actually
-needs.
+Milestone 10 adds a Notification Service with its own database, and the
+first table this system will need for **idempotent consumption** — a ledger
+of processed event ids, because sending an email is not an operation you can
+make naturally repeatable the way `UPDATE … WHERE status = 'ACTIVE'` is.

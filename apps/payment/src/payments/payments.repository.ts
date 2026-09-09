@@ -1,9 +1,26 @@
 import { PaymentFailureCode, PaymentStatus } from '@ecommerce/contracts';
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
+import { UniqueConstraintError } from 'sequelize';
 import { Payment } from './payment.model';
 
+/**
+ * Raised when this order already has a payment in flight or a successful
+ * one, and the database refused a second.
+ *
+ * A named error rather than letting the UniqueConstraintError escape,
+ * because the caller has to tell it apart from the idempotency collision —
+ * they arrive as the same class from Sequelize and mean opposite things.
+ */
+export class OrderAlreadyPaidError extends Error {
+  constructor(readonly orderId: string) {
+    super(`order ${orderId} already has an active or successful payment`);
+    this.name = 'OrderAlreadyPaidError';
+  }
+}
+
 export interface CreatePaymentInput {
+  idempotencyKey: string | null;
   orderId: string;
   orderNumber: string;
   userId: string;
@@ -37,6 +54,7 @@ export interface PaymentRecord {
   cardLast4: string | null;
   cardBrand: string | null;
   retryable: boolean;
+  idempotencyKey: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -56,8 +74,87 @@ export class PaymentsRepository {
    * charged. Writing PENDING first means the worst case is a row that says
    * "we asked, and we never found out" — which is a thing you can
    * reconcile, alert on, and explain.
+   *
+   * IT IS ALSO THE GUARD. Both unique indexes fire HERE, at insert time,
+   * before a single penny has moved. That is the whole reason the row is
+   * written first: a constraint that fired after the charge would leave the
+   * customer paid and the database refusing to say so.
+   *
+   * Returns `{ payment }` when it wrote one, or `{ replay }` when this exact
+   * request has been seen before. Throws `OrderAlreadyPaidError` when a
+   * DIFFERENT request is trying to pay an order that is already covered.
    */
-  async createPending(input: CreatePaymentInput): Promise<PaymentRecord> {
+  async createPending(
+    input: CreatePaymentInput,
+  ): Promise<{ payment: PaymentRecord; replayed: boolean }> {
+    // Checked before inserting, so the ordinary replay does not depend on
+    // catching an exception. The catch below is still required — it is what
+    // closes the race between two simultaneous retries — but a check that
+    // usually succeeds keeps the common path readable.
+    if (input.idempotencyKey !== null) {
+      const seen = await this.findByIdempotencyKey(
+        input.userId,
+        input.idempotencyKey,
+      );
+      if (seen !== null) {
+        return { payment: seen, replayed: true };
+      }
+    }
+
+    try {
+      return { payment: await this.insert(input), replayed: false };
+    } catch (error) {
+      if (!(error instanceof UniqueConstraintError)) {
+        throw error;
+      }
+
+      // TWO INDEXES CAN FIRE HERE, and they mean opposite things.
+      //
+      //   the idempotency index  a retry of the SAME request lost a race
+      //                          with itself. Return the winner's payment.
+      //   the order index        a DIFFERENT request is trying to pay an
+      //                          order that already has an active or
+      //                          successful payment. Refuse it.
+      //
+      // Sequelize reports both as UniqueConstraintError, so the constraint
+      // NAME is what tells them apart. Guessing instead — "if a key was
+      // sent, assume it was the key" — would turn a genuine double-payment
+      // attempt into a silent replay of an unrelated charge.
+      const constraint = constraintName(error);
+
+      if (
+        constraint === 'payments_user_idempotency_key' &&
+        input.idempotencyKey !== null
+      ) {
+        const winner = await this.findByIdempotencyKey(
+          input.userId,
+          input.idempotencyKey,
+        );
+        if (winner !== null) {
+          return { payment: winner, replayed: true };
+        }
+      }
+
+      if (constraint === 'payments_one_active_per_order') {
+        throw new OrderAlreadyPaidError(input.orderId);
+      }
+
+      throw error;
+    }
+  }
+
+  /** The attempt this user made under this key, if any. */
+  async findByIdempotencyKey(
+    userId: string,
+    idempotencyKey: string,
+  ): Promise<PaymentRecord | null> {
+    const payment = await this.payments.findOne({
+      where: { userId, idempotencyKey },
+    });
+    return payment === null ? null : toRecord(payment);
+  }
+
+  private async insert(input: CreatePaymentInput): Promise<PaymentRecord> {
     const payment = await this.payments.create(
       {
         orderId: input.orderId,
@@ -69,6 +166,7 @@ export class PaymentsRepository {
         paymentMethodToken: input.paymentMethodToken,
         cardLast4: input.cardLast4,
         cardBrand: input.cardBrand,
+        idempotencyKey: input.idempotencyKey,
       } as Payment,
       {
         // `reference` is NOT listed: it comes from the sequence DEFAULT, and
@@ -83,6 +181,7 @@ export class PaymentsRepository {
           'paymentMethodToken',
           'cardLast4',
           'cardBrand',
+          'idempotencyKey',
         ],
       },
     );
@@ -178,7 +277,22 @@ function toRecord(payment: Payment): PaymentRecord {
     cardLast4: payment.cardLast4,
     cardBrand: payment.cardBrand,
     retryable: payment.retryable,
+    idempotencyKey: payment.idempotencyKey,
     createdAt: payment.createdAt,
     updatedAt: payment.updatedAt,
   };
+}
+
+/**
+ * The name of the index a UniqueConstraintError came from.
+ *
+ * Sequelize surfaces the driver's error as `.parent`, and `pg` puts the
+ * constraint name on it. Typed loosely because the shape belongs to the
+ * driver rather than to Sequelize's public API — and read defensively,
+ * because an undefined constraint name must fall through to "rethrow"
+ * rather than silently matching one of the branches above.
+ */
+function constraintName(error: UniqueConstraintError): string | undefined {
+  const parent = error.parent as { constraint?: string } | undefined;
+  return parent?.constraint;
 }

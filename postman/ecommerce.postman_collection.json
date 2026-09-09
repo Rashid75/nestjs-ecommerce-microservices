@@ -1009,7 +1009,7 @@
     },
     {
       "name": "6 · Payments",
-      "description": "Milestone 9, pass 1. Paying is a **separate call** from checkout, so each is retryable on its own.\n\n`POST /payments` sends an `orderId` and a `paymentMethodToken` — never a card number, never an amount. The amount is read from the order server-side; the card was tokenised by the provider before it ever reached us.\n\nThe tokens force an outcome, the way every provider test card does:\n\n| Token | Outcome |\n| --- | --- |\n| `tok_ok` | approved |\n| `tok_declined` | declined — insufficient funds |\n| `tok_fraud` | declined — suspected fraud |\n| `tok_timeout` | no answer at all (takes ~10s) |\n| `tok_unavailable` | provider is down |\n| `tok_flaky` | fails about half the time |\n\nRun folder `5 · Orders` first — this one pays for the order it left behind. The last request shows a gap that is still open.",
+      "description": "Milestone 9. Paying is a **separate call** from checkout, so each is retryable on its own.\n\n`POST /payments` sends an `orderId` and a `paymentMethodToken` — never a card number, never an amount. The amount is read from the order server-side; the card was tokenised by the provider before it ever reached us.\n\nThe tokens force an outcome, the way every provider test card does:\n\n| Token | Outcome |\n| --- | --- |\n| `tok_ok` | approved |\n| `tok_declined` | declined — insufficient funds |\n| `tok_fraud` | declined — suspected fraud |\n| `tok_timeout` | no answer at all (takes ~10s) |\n| `tok_unavailable` | provider is down |\n| `tok_flaky` | fails about half the time |\n\nTwo protections against a double charge, and they answer different questions:\n\n| | Order index | Idempotency key |\n| --- | --- | --- |\n| Asks | does this order already have a payment? | have I seen this request before? |\n| Answers | **409**, nothing charged | **the original response**, replayed |\n\nRun folder `5 · Orders` first — this one pays for the order it left behind.",
       "item": [
         {
           "name": "Place an order to pay for",
@@ -1059,6 +1059,17 @@
           "name": "Pay — approved",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// One key per attempt, reused by the next request to prove that a",
+                  "// retry returns the SAME payment rather than making another.",
+                  "pm.environment.set('paymentKey', 'pm-' + Date.now());"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1079,6 +1090,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{paymentKey}}"
               }
             ],
             "body": {
@@ -1095,7 +1110,42 @@
               "host": ["{{gatewayUrl}}"],
               "path": ["{{apiPrefix}}", "payments"]
             },
-            "description": "201. Note what comes back: a `reference` you could read down a phone, the provider own `providerReference`, a last-4 and a brand — and **not** the token you sent. Anything echoed back ends up in a log."
+            "description": "201. Note what comes back: a `reference` you could read down a phone, the provider own `providerReference`, a last-4 and a brand — and **not** the token or the key you sent. Anything echoed back ends up in a log.\n\nThe `Idempotency-Key` is generated per run by the pre-request script. A real client generates one per checkout attempt and reuses it across retries."
+          }
+        },
+        {
+          "name": "Send it again with the SAME key — 200, replayed",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{paymentKey}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"paymentMethodToken\": \"tok_ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "**200, not 201** — nothing was created. The `Idempotent-Replay: true` header says so, and the body is the SAME payment: same id, same reference, same provider reference.\n\nThis is what a client that timed out actually needs. A 409 would tell it the order is covered; only the key tells it *what happened to its own request*."
           }
         },
         {
@@ -1264,7 +1314,18 @@
               "path": ["{{apiPrefix}}", "payments"]
             },
             "description": "**402 Payment Required**, and `retryable: false`.\n\nNot 400 — the request was perfectly well formed. Not 500 — nothing broke. Not 503 — sending it again produces the same refusal, and each attempt is a line on the customer statement.\n\nThe attempt is still recorded, with the provider reference, because that is what support quotes on the phone."
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('orderId2', pm.environment.get('orderId'));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Pay — provider down (503)",
@@ -1360,7 +1421,7 @@
           }
         },
         {
-          "name": "⚠ Pay a fresh order TWICE — still open",
+          "name": "Pay the same order with a NEW key — 409, nothing charged",
           "request": {
             "method": "POST",
             "header": [
@@ -1371,6 +1432,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "pm-different-{{$timestamp}}"
               }
             ],
             "body": {
@@ -1387,7 +1452,42 @@
               "host": ["{{gatewayUrl}}"],
               "path": ["{{apiPrefix}}", "payments"]
             },
-            "description": "**Not a bug to report — the thing to notice.**\n\nSend this twice in quick succession, before the `payment.succeeded` event has moved the order to PAID. Two payments, two charges, one order.\n\nPass 2 adds two different fixes: a unique index that REFUSES the second successful payment, and an `Idempotency-Key` that RETURNS THE FIRST ONE ANSWER. A client retrying after a timeout needs the second, not the first."
+            "description": "A different request, so the key does not match and there is nothing to replay. The **order index** refuses it instead — at INSERT, before the provider is called.\n\nRead the message: *nothing was charged*. That is the difference between a constraint and a check: the constraint fires while refusing is still free."
+          }
+        },
+        {
+          "name": "Retry a declined card with a NEW key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "pm-retry-{{$timestamp}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId2}}\",\n  \"paymentMethodToken\": \"tok_ok\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "payments"]
+            },
+            "description": "The declined attempt above left the order payable — a decline is not the end of an order, it is the commonest reason to reach for another card.\n\nA NEW key, because a key identifies one ATTEMPT: reusing the old one would replay the 402 forever. Set `orderId2` to the order you declined, or just re-run the two requests above."
           }
         }
       ]

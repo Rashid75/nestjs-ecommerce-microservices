@@ -1,4 +1,9 @@
-import { PageMetaDto, PaymentDto } from '@ecommerce/contracts';
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENT_REPLAY_HEADER,
+  PageMetaDto,
+  PaymentDto,
+} from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
 import { UpstreamProxy } from '../common/upstream-proxy';
@@ -23,17 +28,43 @@ export class PaymentsProxyService extends UpstreamProxy {
     super(http, 'Payment service');
   }
 
-  private headers(userId: string): Record<string, string> {
-    return { 'x-user-id': userId };
+  private headers(
+    userId: string,
+    idempotencyKey?: string,
+  ): Record<string, string> {
+    return {
+      'x-user-id': userId,
+      ...(idempotencyKey === undefined
+        ? {}
+        : { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey }),
+    };
   }
 
-  pay(userId: string, body: unknown): Promise<PaymentDto> {
-    return this.forward<PaymentDto>({
+  /**
+   * Passes the `Idempotency-Key` straight through.
+   *
+   * A gateway that dropped it would silently disable the protection: the
+   * charge still works, and a retry charges the customer again — the exact
+   * failure the header exists to prevent, made invisible by the one
+   * component sitting between the client and the service.
+   */
+  async pay(
+    userId: string,
+    body: unknown,
+    idempotencyKey?: string,
+  ): Promise<{ data: PaymentDto; status: number; replayed: boolean }> {
+    const response = await this.forwardWithHeaders<PaymentDto>({
       method: 'POST',
       url: '/payments',
       data: body,
-      headers: this.headers(userId),
+      headers: this.headers(userId, idempotencyKey),
     });
+
+    return {
+      data: response.data,
+      status: response.status,
+      replayed: response.headers[IDEMPOTENT_REPLAY_HEADER] === 'true',
+    };
   }
 
   list(

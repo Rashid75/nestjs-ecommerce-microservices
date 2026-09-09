@@ -4,11 +4,15 @@ import {
   PaymentStatus,
   PaymentToken,
 } from '@ecommerce/contracts';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import type { ClientProxy } from '@nestjs/microservices';
 import type { OrderClientService } from '../orders/order-client.service';
 import type { MockProviderService } from '../provider/mock-provider.service';
-import type { PaymentRecord, PaymentsRepository } from './payments.repository';
+import {
+  OrderAlreadyPaidError,
+  type PaymentRecord,
+  type PaymentsRepository,
+} from './payments.repository';
 import { PaymentsService } from './payments.service';
 
 /**
@@ -21,13 +25,18 @@ import { PaymentsService } from './payments.service';
  *   ✅ declined → 402 and not retryable; provider error → 503 and retryable
  *   ✅ `payment.succeeded` is emitted only on an approval
  *   ✅ a failed attempt is still recorded, with its reason
+ *   ✅ a repeated request replays the first attempt's answer, charging
+ *      nothing — including when the first attempt failed
+ *   ✅ a second payment for the same order is refused BEFORE the provider
+ *      is called
  *
  * WHAT THEY CANNOT
  *
  *   ❌ that a timeout leaves the money in a known state. It does not, and no
  *      test can make it. That is the point of the FAILED status.
- *   ❌ that the same request twice charges once. It does not — deliberately,
- *      until pass 2.
+ *   ❌ that the two unique indexes actually hold under concurrency. That
+ *      needs real connections contending over a real table; these tests can
+ *      only prove the service reacts correctly when the database says no.
  */
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const ORDER_ID = '33333333-3333-4333-8333-333333333333';
@@ -49,6 +58,7 @@ function makePayment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
     cardLast4: '4242',
     cardBrand: 'VISA',
     retryable: false,
+    idempotencyKey: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -57,7 +67,10 @@ function makePayment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
 
 function build() {
   const repo = {
-    createPending: jest.fn().mockResolvedValue(makePayment()),
+    createPending: jest
+      .fn()
+      .mockResolvedValue({ payment: makePayment(), replayed: false }),
+    findByIdempotencyKey: jest.fn().mockResolvedValue(null),
     // `settle` echoes back what it was asked to write, which is what the
     // real one does after the UPDATE.
     settle: jest
@@ -105,10 +118,14 @@ describe('PaymentsService.pay — approved', () => {
   it('charges the amount from the ORDER, not from the request', async () => {
     const { service, provider } = build();
 
-    await service.pay(USER_ID, {
-      orderId: ORDER_ID,
-      paymentMethodToken: PaymentToken.Ok,
-    });
+    await service.pay(
+      USER_ID,
+      {
+        orderId: ORDER_ID,
+        paymentMethodToken: PaymentToken.Ok,
+      },
+      null,
+    );
 
     // `CreatePaymentDto` has no amount field at all. This asserts what the
     // type system already enforces, because it is the property that stops a
@@ -123,10 +140,14 @@ describe('PaymentsService.pay — approved', () => {
   it('writes the attempt BEFORE calling the provider', async () => {
     const { service, repo, provider } = build();
 
-    await service.pay(USER_ID, {
-      orderId: ORDER_ID,
-      paymentMethodToken: PaymentToken.Ok,
-    });
+    await service.pay(
+      USER_ID,
+      {
+        orderId: ORDER_ID,
+        paymentMethodToken: PaymentToken.Ok,
+      },
+      null,
+    );
 
     // THE ORDERING THAT MATTERS. A process that dies mid-charge must leave a
     // row saying "we asked" — otherwise a customer can be charged with no
@@ -139,10 +160,14 @@ describe('PaymentsService.pay — approved', () => {
   it('settles as SUCCEEDED and announces it', async () => {
     const { service, repo, events } = build();
 
-    const payment = await service.pay(USER_ID, {
-      orderId: ORDER_ID,
-      paymentMethodToken: PaymentToken.Ok,
-    });
+    const { payment } = await service.pay(
+      USER_ID,
+      {
+        orderId: ORDER_ID,
+        paymentMethodToken: PaymentToken.Ok,
+      },
+      null,
+    );
 
     expect(payment.status).toBe(PaymentStatus.Succeeded);
     expect(payment.providerReference).toBe('ch_abc123');
@@ -159,10 +184,14 @@ describe('PaymentsService.pay — approved', () => {
   it('never returns the payment method token', async () => {
     const { service } = build();
 
-    const payment = await service.pay(USER_ID, {
-      orderId: ORDER_ID,
-      paymentMethodToken: PaymentToken.Ok,
-    });
+    const { payment } = await service.pay(
+      USER_ID,
+      {
+        orderId: ORDER_ID,
+        paymentMethodToken: PaymentToken.Ok,
+      },
+      null,
+    );
 
     // Anything echoed back ends up in somebody's log.
     expect(JSON.stringify(payment)).not.toContain('tok_');
@@ -180,10 +209,14 @@ describe('PaymentsService.pay — declined', () => {
     });
 
     await expect(
-      service.pay(USER_ID, {
-        orderId: ORDER_ID,
-        paymentMethodToken: PaymentToken.Declined,
-      }),
+      service.pay(
+        USER_ID,
+        {
+          orderId: ORDER_ID,
+          paymentMethodToken: PaymentToken.Declined,
+        },
+        null,
+      ),
     ).rejects.toMatchObject({
       // 402 Payment Required. Not 400 — the request was well formed. Not
       // 500 — nothing broke. Not 503 — retrying will not help.
@@ -201,10 +234,14 @@ describe('PaymentsService.pay — declined', () => {
     });
 
     await expect(
-      service.pay(USER_ID, {
-        orderId: ORDER_ID,
-        paymentMethodToken: PaymentToken.Fraud,
-      }),
+      service.pay(
+        USER_ID,
+        {
+          orderId: ORDER_ID,
+          paymentMethodToken: PaymentToken.Fraud,
+        },
+        null,
+      ),
     ).rejects.toThrow();
 
     const [, outcome] = repo.settle.mock.calls[0];
@@ -226,10 +263,14 @@ describe('PaymentsService.pay — declined', () => {
     });
 
     await expect(
-      service.pay(USER_ID, {
-        orderId: ORDER_ID,
-        paymentMethodToken: PaymentToken.Declined,
-      }),
+      service.pay(
+        USER_ID,
+        {
+          orderId: ORDER_ID,
+          paymentMethodToken: PaymentToken.Declined,
+        },
+        null,
+      ),
     ).rejects.toThrow();
 
     const [pattern, payload] = events.emit.mock.calls[0];
@@ -250,10 +291,14 @@ describe('PaymentsService.pay — provider failure', () => {
     });
 
     await expect(
-      service.pay(USER_ID, {
-        orderId: ORDER_ID,
-        paymentMethodToken: PaymentToken.Timeout,
-      }),
+      service.pay(
+        USER_ID,
+        {
+          orderId: ORDER_ID,
+          paymentMethodToken: PaymentToken.Timeout,
+        },
+        null,
+      ),
     ).rejects.toMatchObject({ status: 503 });
   });
 
@@ -266,10 +311,14 @@ describe('PaymentsService.pay — provider failure', () => {
     });
 
     await expect(
-      service.pay(USER_ID, {
-        orderId: ORDER_ID,
-        paymentMethodToken: PaymentToken.Timeout,
-      }),
+      service.pay(
+        USER_ID,
+        {
+          orderId: ORDER_ID,
+          paymentMethodToken: PaymentToken.Timeout,
+        },
+        null,
+      ),
     ).rejects.toThrow();
 
     const [, outcome] = repo.settle.mock.calls[0];
@@ -278,6 +327,128 @@ describe('PaymentsService.pay — provider failure', () => {
     // NULL, because the request never got far enough to earn one — which is
     // exactly the case where you most want it.
     expect(outcome.providerReference).toBeNull();
+  });
+});
+
+describe('PaymentsService.pay — idempotency', () => {
+  it('replays a successful payment without charging again', async () => {
+    const { service, repo, provider, events } = build();
+    repo.findByIdempotencyKey.mockResolvedValue(
+      makePayment({
+        status: PaymentStatus.Succeeded,
+        providerReference: 'ch_first',
+        idempotencyKey: 'key-1',
+      }),
+    );
+
+    const result = await service.pay(
+      USER_ID,
+      { orderId: ORDER_ID, paymentMethodToken: PaymentToken.Ok },
+      'key-1',
+    );
+
+    expect(result.replayed).toBe(true);
+    expect(result.payment.providerReference).toBe('ch_first');
+    // THE ASSERTION THAT MATTERS: no second charge, and no second event.
+    expect(provider.charge).not.toHaveBeenCalled();
+    expect(repo.createPending).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  it('replays a DECLINE as the same 402, not as a fresh attempt', async () => {
+    const { service, repo, provider } = build();
+    repo.findByIdempotencyKey.mockResolvedValue(
+      makePayment({
+        status: PaymentStatus.Declined,
+        failureCode: PaymentFailureCode.InsufficientFunds,
+        failureMessage: 'The card has insufficient funds',
+      }),
+    );
+
+    await expect(
+      service.pay(
+        USER_ID,
+        { orderId: ORDER_ID, paymentMethodToken: PaymentToken.Declined },
+        'key-1',
+      ),
+    ).rejects.toMatchObject({ status: 402 });
+
+    // Send it again, get the same answer — that is what idempotent means.
+    expect(provider.charge).not.toHaveBeenCalled();
+  });
+
+  it('replays a FAILED attempt as the same 503, still marked retryable', async () => {
+    const { service, repo } = build();
+    repo.findByIdempotencyKey.mockResolvedValue(
+      makePayment({
+        status: PaymentStatus.Failed,
+        failureCode: PaymentFailureCode.ProviderTimeout,
+        retryable: true,
+      }),
+    );
+
+    await expect(
+      service.pay(
+        USER_ID,
+        { orderId: ORDER_ID, paymentMethodToken: PaymentToken.Timeout },
+        'key-1',
+      ),
+    ).rejects.toMatchObject({ status: 503 });
+  });
+
+  it('does not look up a key that was not sent', async () => {
+    const { service, repo } = build();
+
+    await service.pay(
+      USER_ID,
+      { orderId: ORDER_ID, paymentMethodToken: PaymentToken.Ok },
+      null,
+    );
+
+    // A client that sends no key is not refused — only less protected.
+    expect(repo.findByIdempotencyKey).not.toHaveBeenCalled();
+    expect(repo.createPending).toHaveBeenCalled();
+  });
+
+  it('replays the winner when two identical requests race', async () => {
+    const { service, repo, provider } = build();
+    // Nothing found on the pre-check, then the INSERT loses to the twin —
+    // the repository resolves the race by returning the winner.
+    repo.createPending.mockResolvedValue({
+      payment: makePayment({
+        status: PaymentStatus.Succeeded,
+        providerReference: 'ch_winner',
+      }),
+      replayed: true,
+    });
+
+    const result = await service.pay(
+      USER_ID,
+      { orderId: ORDER_ID, paymentMethodToken: PaymentToken.Ok },
+      'key-1',
+    );
+
+    expect(result.replayed).toBe(true);
+    expect(provider.charge).not.toHaveBeenCalled();
+  });
+});
+
+describe('PaymentsService.pay — the order constraint', () => {
+  it('refuses a second payment for one order, before charging anything', async () => {
+    const { service, repo, provider } = build();
+    repo.createPending.mockRejectedValue(new OrderAlreadyPaidError(ORDER_ID));
+
+    await expect(
+      service.pay(
+        USER_ID,
+        { orderId: ORDER_ID, paymentMethodToken: PaymentToken.Ok },
+        null,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    // THE POINT OF DOING THIS WITH AN INDEX: the refusal happens at INSERT,
+    // so the provider is never called and nothing is charged.
+    expect(provider.charge).not.toHaveBeenCalled();
   });
 });
 

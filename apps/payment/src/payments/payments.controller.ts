@@ -1,18 +1,26 @@
 import {
   CreatePaymentDto,
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENT_REPLAY_HEADER,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
   PageMetaDto,
   PaymentDto,
   QueryPaymentsDto,
 } from '@ecommerce/contracts';
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  Headers,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUserId } from './current-user.decorator';
 import { PaymentsService } from './payments.service';
 
@@ -27,10 +35,6 @@ import { PaymentsService } from './payments.service';
  * removable — it is the record of whether a customer's card was charged, and
  * the only two things that may ever change it are the provider's answer and,
  * later, a refund, which is a NEW record rather than an edit to this one.
- *
- * `POST /payments` rather than `POST /orders/:id/pay`: a payment is a
- * resource in its own right, with its own id that a client keeps and quotes.
- * The order is an attribute of it, not its owner.
  */
 @Controller('payments')
 export class PaymentsController {
@@ -39,17 +43,37 @@ export class PaymentsController {
   /**
    * Takes a payment.
    *
-   * 201 on success; 402 when the card was declined; 503 when the provider
-   * could not be reached. All three are documented answers rather than
-   * accidents — see the service for why 402 and 503 are different in a way
-   * that matters to the caller.
+   *   201  charged
+   *   200  replayed — this exact request was made before, and this is what
+   *        happened the first time
+   *   402  the card was declined
+   *   409  this order already has a payment, or the first attempt is still
+   *        in flight. NOTHING WAS CHARGED.
+   *   503  the provider could not be reached; the outcome is unknown
+   *
+   * The 201/200 distinction is the client's signal that its retry found
+   * existing work rather than doing new work — the same convention Stripe
+   * uses, and the reason the replay header exists alongside it.
    */
   @Post()
-  pay(
+  async pay(
     @CurrentUserId() userId: string,
     @Body() dto: CreatePaymentDto,
+    @Headers(IDEMPOTENCY_KEY_HEADER) idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) response: Response,
   ): Promise<PaymentDto> {
-    return this.payments.pay(userId, dto);
+    const result = await this.payments.pay(
+      userId,
+      dto,
+      normaliseKey(idempotencyKey),
+    );
+
+    response.status(result.replayed ? HttpStatus.OK : HttpStatus.CREATED);
+    if (result.replayed) {
+      response.setHeader(IDEMPOTENT_REPLAY_HEADER, 'true');
+    }
+
+    return result.payment;
   }
 
   @Get()
@@ -67,4 +91,30 @@ export class PaymentsController {
   ): Promise<PaymentDto> {
     return this.payments.findOne(userId, paymentId);
   }
+}
+
+/**
+ * An absent key is allowed; a malformed one is not.
+ *
+ * Silently ignoring an over-long key would be the worst outcome on this
+ * endpoint of all: the client believes its charge is protected against
+ * retries, it is not, and it finds out by charging the customer twice.
+ */
+function normaliseKey(raw: string | undefined): string | null {
+  if (raw === undefined) {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    return null;
+  }
+
+  if (trimmed.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw new BadRequestException(
+      `${IDEMPOTENCY_KEY_HEADER} must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
+    );
+  }
+
+  return trimmed;
 }

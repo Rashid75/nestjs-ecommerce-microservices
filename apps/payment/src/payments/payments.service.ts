@@ -12,6 +12,7 @@ import {
   type PaymentSucceededPayload,
 } from '@ecommerce/contracts';
 import {
+  ConflictException,
   HttpException,
   HttpStatus,
   Inject,
@@ -23,37 +24,60 @@ import {
 import { ClientProxy } from '@nestjs/microservices';
 import { OrderClientService } from '../orders/order-client.service';
 import { MockProviderService } from '../provider/mock-provider.service';
-import { PaymentRecord, PaymentsRepository } from './payments.repository';
+import {
+  OrderAlreadyPaidError,
+  PaymentRecord,
+  PaymentsRepository,
+} from './payments.repository';
 
 const DEFAULT_PAGE_SIZE = 20;
 
+/** What `pay` returns: the payment, and whether it is a replay. */
+export interface PaymentResult {
+  payment: PaymentDto;
+  replayed: boolean;
+}
+
 /**
- * Taking money — the simple version, on purpose.
+ * Taking money.
  *
  * THE SHAPE OF EVERY PAYMENT, and the order is not negotiable:
  *
- *   1. read the order          amount and ownership from the server
- *   2. write PENDING           before the provider is called, so a crash
- *                              mid-charge still leaves evidence
- *   3. call the provider       approved · declined · no answer
- *   4. settle the row          and publish what happened
+ *   0. have we seen this request before?   replay, charging nothing
+ *   1. read the order                      amount and ownership, server-side
+ *   2. write PENDING                       both unique indexes fire HERE,
+ *                                          before a penny has moved
+ *   3. call the provider                   approved · declined · no answer
+ *   4. settle the row                      and publish what happened
  *
  * Step 2 before step 3 is the rule that separates a payment service from a
- * form that calls an API. If the row is written afterwards, then a process
- * that dies mid-charge leaves a customer who may have been charged and a
- * database with no record that anything was ever attempted.
+ * form that calls an API. It is where the record is created for a charge
+ * that might die mid-flight, and it is where the database gets to refuse a
+ * duplicate while refusing still costs nothing.
  *
- * WHAT THIS DELIBERATELY DOES NOT DO — pass 2 of this milestone:
+ * TWO PROTECTIONS AGAINST A DOUBLE CHARGE, answering different questions.
+ * Both are database constraints, because only a constraint is atomic:
  *
- *   NO IDEMPOTENCY KEY. Send the same request twice and you get two
- *   payments. If both succeed, the customer is charged twice. This is easy
- *   to reproduce and worth reproducing once.
+ *   THE ORDER INDEX refuses a second payment for an order that already has
+ *   one in flight or successful. It is what stops the double charge.
  *
- *   NOTHING STOPS TWO SUCCESSFUL PAYMENTS ON ONE ORDER. The index that
- *   would refuse the second is named in the migration and left out.
+ *   THE IDEMPOTENCY KEY returns the FIRST attempt's answer when the same
+ *   request arrives again. It is what a client that never found out what
+ *   happened actually needs — a 409 would tell it nothing.
+ *
+ * A key identifies ONE attempt, including a failed one: retrying under the
+ * same key replays that outcome. To genuinely try again — another card, or
+ * after the provider recovers — the client sends a NEW key, and the order
+ * index decides whether that is allowed.
+ *
+ * STILL NOT BUILT:
  *
  *   NO AUTOMATIC RETRY of a retryable failure. The API says whether a retry
  *   is worth making; nothing here makes it.
+ *
+ *   NO RECONCILIATION. A payment stuck PENDING blocks its order, because
+ *   nothing goes back to the provider to ask what happened. Safer than
+ *   charging twice, and it needs a human today.
  *
  *   NO REFUND. A refund is a separate signed record, not a deleted payment,
  *   and it needs its own endpoint and its own event.
@@ -69,7 +93,26 @@ export class PaymentsService {
     @Inject(EVENTS_CLIENT) private readonly events: ClientProxy,
   ) {}
 
-  async pay(userId: string, dto: CreatePaymentDto): Promise<PaymentDto> {
+  async pay(
+    userId: string,
+    dto: CreatePaymentDto,
+    idempotencyKey: string | null,
+  ): Promise<PaymentResult> {
+    // ── 0. have we seen this exact request before? ─────────────────────
+    //
+    // Before the order lookup, before anything. A replay must not depend on
+    // the Order Service being up: the customer has already been charged (or
+    // already failed), and saying so is a read of our own database.
+    if (idempotencyKey !== null) {
+      const seen = await this.payments.findByIdempotencyKey(
+        userId,
+        idempotencyKey,
+      );
+      if (seen !== null) {
+        return this.replay(seen);
+      }
+    }
+
     // ── 1. what are we charging for, and how much ──────────────────────
     const order = await this.orders.fetchPayable(userId, dto.orderId);
 
@@ -78,7 +121,8 @@ export class PaymentsService {
     const card = this.provider.describe(dto.paymentMethodToken);
 
     // ── 2. write the attempt BEFORE calling out ───────────────────────
-    const pending = await this.payments.createPending({
+    const created = await this.createAttempt({
+      idempotencyKey,
       orderId: order.id,
       orderNumber: order.orderNumber,
       userId,
@@ -88,6 +132,14 @@ export class PaymentsService {
       cardLast4: card.last4,
       cardBrand: card.brand,
     });
+
+    // Two identical requests raced and this one lost. The winner's attempt
+    // is what the caller gets — not a second charge.
+    if (created.replayed) {
+      return this.replay(created.payment);
+    }
+
+    const pending = created.payment;
 
     // ── 3. ask the provider ───────────────────────────────────────────
     const result = await this.provider.charge(
@@ -120,7 +172,7 @@ export class PaymentsService {
         providerReference: result.providerReference,
       } satisfies PaymentSucceededPayload);
 
-      return toDto(settled);
+      return { payment: toDto(settled), replayed: false };
     }
 
     if (result.outcome === 'DECLINED') {
@@ -216,6 +268,95 @@ export class PaymentsService {
   }
 
   /**
+   * Answers with a payment that already exists, exactly as it answered the
+   * first time.
+   *
+   * A SUCCEEDED replay comes back as a value; a DECLINED or FAILED one is
+   * re-thrown with the same status and body the original attempt produced.
+   * That is what "idempotent" has to mean to a client: send it again, get
+   * the same answer — not a different answer that happens to be about the
+   * same payment.
+   */
+  private replay(payment: PaymentRecord): PaymentResult {
+    this.logger.log(
+      `${payment.reference}: idempotent replay (${payment.status})`,
+    );
+
+    if (payment.status === PaymentStatus.Succeeded) {
+      return { payment: toDto(payment), replayed: true };
+    }
+
+    if (payment.status === PaymentStatus.Declined) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.PAYMENT_REQUIRED,
+          error: 'Payment Required',
+          message: payment.failureMessage ?? 'The card was declined',
+          paymentId: payment.id,
+          reference: payment.reference,
+          failureCode: payment.failureCode,
+          retryable: false,
+          replayed: true,
+        },
+        HttpStatus.PAYMENT_REQUIRED,
+      );
+    }
+
+    if (payment.status === PaymentStatus.Failed) {
+      throw new ServiceUnavailableException({
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        error: 'Service Unavailable',
+        message: payment.failureMessage ?? 'The payment could not be completed',
+        paymentId: payment.id,
+        reference: payment.reference,
+        failureCode: payment.failureCode,
+        // Still true — but a retry needs a NEW key, or this same answer
+        // comes back forever. A key identifies the attempt, not the
+        // intention.
+        retryable: true,
+        replayed: true,
+      });
+    }
+
+    // PENDING: the first attempt is still in flight, or it died without
+    // settling. Either way the honest answer is "we do not know yet", and it
+    // must not be a second charge.
+    throw new ConflictException({
+      statusCode: HttpStatus.CONFLICT,
+      error: 'Conflict',
+      message: 'A payment for this request is still in progress',
+      paymentId: payment.id,
+      reference: payment.reference,
+      replayed: true,
+    });
+  }
+
+  /** Turns the order constraint into a 409 rather than a 500. */
+  private async createAttempt(
+    input: Parameters<PaymentsRepository['createPending']>[0],
+  ): Promise<{ payment: PaymentRecord; replayed: boolean }> {
+    try {
+      return await this.payments.createPending(input);
+    } catch (error) {
+      if (error instanceof OrderAlreadyPaidError) {
+        // The database refused, BEFORE the provider was called. NOTHING WAS
+        // CHARGED, which is the entire reason this is an index rather than a
+        // read-then-write in TypeScript.
+        this.logger.warn(`refused a second payment for order ${input.orderId}`);
+
+        throw new ConflictException({
+          statusCode: HttpStatus.CONFLICT,
+          error: 'Conflict',
+          message:
+            'This order already has a payment in progress or completed. Nothing was charged.',
+          orderId: input.orderId,
+        });
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Settles the attempt, or explains loudly why it could not be settled.
    *
    * `settle` returning null means the row was no longer PENDING — something
@@ -266,8 +407,9 @@ function toDto(record: PaymentRecord): PaymentDto {
     amount: record.amount,
     currency: record.currency,
     retryable: record.retryable,
-    // The token is NOT here, deliberately. The client sent it and does not
-    // need it echoed; anything that is echoed ends up in a log somewhere.
+    // Neither the token nor the idempotency key is here, deliberately. The
+    // client sent both and does not need either echoed; anything echoed
+    // ends up in a log somewhere.
     ...(record.providerReference !== null
       ? { providerReference: record.providerReference }
       : {}),

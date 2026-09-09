@@ -1,5 +1,7 @@
 import {
   CreatePaymentDto,
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENT_REPLAY_HEADER,
   PaymentDto,
   QueryPaymentsDto,
   UserProfileDto,
@@ -8,13 +10,16 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthenticatedUser } from '../common/authenticated-user.decorator';
 import { AuthenticatedUserGuard } from '../common/authenticated-user.guard';
 import {
@@ -36,11 +41,26 @@ export class PaymentsController {
   constructor(private readonly payments: PaymentsProxyService) {}
 
   @Post()
-  pay(
+  async pay(
     @Body() dto: CreatePaymentDto,
+    @Headers(IDEMPOTENCY_KEY_HEADER) idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) response: Response,
     @AuthenticatedUser() user?: UserProfileDto,
   ): Promise<PaymentDto> {
-    return this.payments.pay(requireUser(user).id, dto);
+    const result = await this.payments.pay(
+      requireUser(user).id,
+      dto,
+      idempotencyKey,
+    );
+
+    // Relay the upstream's status rather than Nest's default 201, so a
+    // replay reaches the client as the 200 the Payment Service intended.
+    response.status(result.status);
+    if (result.replayed) {
+      response.setHeader(IDEMPOTENT_REPLAY_HEADER, 'true');
+    }
+
+    return result.data;
   }
 
   @Get()

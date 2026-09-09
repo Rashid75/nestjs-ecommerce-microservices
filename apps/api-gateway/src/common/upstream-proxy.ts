@@ -15,8 +15,13 @@ import { firstValueFrom } from 'rxjs';
  * `x-cache` is here so a client can see whether the Product Service served
  * a request from Redis or from PostgreSQL — the same signal a CDN gives you,
  * and the only way to verify caching from outside the system.
+ *
+ * `idempotent-replay` says a charge returned an EXISTING payment instead of
+ * making one. A retry loop needs that answer, and dropping the header at the
+ * gateway would leave every client unable to tell a replay from a fresh
+ * charge — turning a safety feature into a silent one.
  */
-const FORWARDED_RESPONSE_HEADERS = ['x-cache'] as const;
+const FORWARDED_RESPONSE_HEADERS = ['x-cache', 'idempotent-replay'] as const;
 
 /**
  * Shared forwarding and failure translation for every downstream service.
@@ -73,7 +78,7 @@ export abstract class UpstreamProxy {
    */
   protected async forwardWithHeaders<T>(
     request: AxiosRequestConfig,
-  ): Promise<{ data: T; headers: Record<string, string> }> {
+  ): Promise<{ data: T; headers: Record<string, string>; status: number }> {
     try {
       const response = await firstValueFrom(this.http.request<T>(request));
 
@@ -85,7 +90,14 @@ export abstract class UpstreamProxy {
         }
       }
 
-      return { data: response.data, headers: forwarded };
+      // The upstream's SUCCESS status, relayed as well as its body. Nest
+      // answers 201 for every POST otherwise, and `POST /payments`
+      // deliberately returns 200 when it replayed an existing payment.
+      return {
+        data: response.data,
+        headers: forwarded,
+        status: response.status,
+      };
     } catch (error) {
       const axiosError = error as AxiosError;
 

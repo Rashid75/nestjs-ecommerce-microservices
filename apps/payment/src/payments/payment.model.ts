@@ -78,6 +78,15 @@ export class Payment extends Model<Payment> {
   @Column({ type: DataType.BOOLEAN, allowNull: false, defaultValue: false })
   retryable!: boolean;
 
+  /**
+   * The client's key for this attempt. NULL when none was sent.
+   *
+   * Unique per user, so the same key always identifies the same attempt —
+   * see the two indexes in the migration and why they are different things.
+   */
+  @Column({ type: DataType.STRING(100), allowNull: true })
+  idempotencyKey!: string | null;
+
   @CreatedAt
   override createdAt!: Date;
 

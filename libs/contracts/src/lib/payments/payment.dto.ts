@@ -169,3 +169,24 @@ export class QueryPaymentsDto {
   @Max(100)
   limit?: number;
 }
+
+/**
+ * The header that makes a charge safe to retry.
+ *
+ * Declared in the shared contract because THREE parties must agree on the
+ * spelling: the client, the gateway that forwards it, and the Payment
+ * Service that enforces it. A typo in any one of them silently disables the
+ * protection — the request still works, it just charges the customer again.
+ */
+export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+
+/**
+ * Set when a response replayed an EXISTING payment instead of making one.
+ *
+ * Without it a client cannot tell a replay from a fresh charge, which is
+ * exactly what a retry loop needs to know.
+ */
+export const IDEMPOTENT_REPLAY_HEADER = 'idempotent-replay';
+
+/** Longest idempotency key the column will hold. */
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 100;

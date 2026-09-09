@@ -4,12 +4,12 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 9 — Payment Service (pass 1).**
+> **Current status: Milestone 9 — Payment Service.**
 > Seven services talking synchronously over HTTP and asynchronously over
 > RabbitMQ. A customer can register, browse, fill a cart, place an order and
-> pay for it against a mock provider. Stock is not yet reserved at checkout,
-> and a payment can still be sent twice — both deliberate, both recorded
-> with their triggers in the plan.
+> pay for it against a mock provider, with idempotent charges. Stock is
+> still not reserved at checkout — deliberate, and recorded with its trigger
+> in the plan.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -632,6 +632,13 @@ POST /api/payments
 card comes from a provider token. The test tokens are `tok_ok`,
 `tok_declined`, `tok_fraud`, `tok_timeout`, `tok_unavailable` and
 `tok_flaky` — see `libs/contracts/src/lib/payments/payment.dto.ts`.
+
+Send an `Idempotency-Key` header. A repeat of the same request replays the
+first attempt's answer — **200** with `Idempotent-Replay: true` instead of
+201 — and charges nothing. A second payment for an order that already has one
+is refused with **409 before the provider is called**, so nothing is charged
+there either. Those are two different protections: the 409 stops a double
+charge, the key tells a client that timed out what actually happened.
 
 **402 vs 503** is the distinction worth learning here. A 402 means the card
 was declined: the request was fine, and retrying it identically will fail

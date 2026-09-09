@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                         |
 | ----------------------- | ------------------------------------------------------- |
-| **Milestones complete** | 8 of 15, plus pass 1 of milestone 9                     |
+| **Milestones complete** | 9 of 15                                                 |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                      |
 | **Databases**           | one per service, six in total                           |
-| **Next**                | **M9 pass 2** — idempotency keys, duplicate charges     |
+| **Next milestone**      | 10 — Notification Service                               |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ▓░ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░   ← M9 pass 1 of 2
+M9 ██ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
 ---
@@ -542,10 +542,10 @@ commit choice accepts.
 
 ---
 
-## 🟡 Milestone 9 — Payment Service
+## ✅ Milestone 9 — Payment Service
 
-**Pass 1 complete.** Split the same way as M8: the plain version first, then
-the machinery that fixes what it visibly gets wrong.
+**Status: complete.** Split the same way as M8: the plain version first,
+then the machinery that fixes what it visibly got wrong.
 
 ### The flow
 
@@ -615,7 +615,7 @@ is a no-op and a cancelled order can never be quietly marked paid.
 
 ### Verified
 
-104 unit tests across ten projects; all seven services build and lint. With
+110 unit tests across ten projects; all seven services build and lint. With
 RabbitMQ stopped, a payment still succeeds and is recorded — only the order's
 move to PAID waits for the broker.
 
@@ -623,7 +623,7 @@ move to PAID waits for the broker.
 
 ## ⬜ Milestone 10 — Notification Service
 
-RabbitMQ consumers, Nodemailer, MailHog, templates. Business services publish
+**Next up.** RabbitMQ consumers, Nodemailer, MailHog, templates. Business services publish
 events; none of them contain email logic.
 
 ---
@@ -706,7 +706,9 @@ exists so that "not yet" never quietly becomes "never".
 | **Processed-events ledger**        | A consumer whose work is not naturally repeatable — sending an email, charging a card.                                                               | M10             |
 | **Topic exchange with bindings**   | A second service needing its own copy of `order.confirmed`. Today one queue means consumers would COMPETE.                                           | M10             |
 | **Event envelope**                 | With the outbox — an `eventId` is what deduplication needs. Correlation ids follow in M11.                                                           | with the outbox |
-| **Secret manager**                 | Before any shared or hosted environment. `.env` is a local-development convenience.                                                                  | M14             |
+| **Payment reconciliation**         | A payment stuck PENDING blocks its order and nobody is told. Ask the provider what happened to it.                                                   | when one sticks |
+| **Refunds**                        | A cancelled order that was paid for. Today the log says a refund is needed and a human arranges it.                                                  | M10 candidate   |
+| **Secret manager**                 | Before any shared or hosted environment — and before a real payment provider, whose key is not a password reset if it leaks.                         | M14             |
 
 ---
 
