@@ -40,5 +40,8 @@ export * from './lib/orders/order.dto';
 // --- payments ---
 export * from './lib/payments/payment.dto';
 
+// --- notifications ---
+export * from './lib/notifications/notification.dto';
+
 // --- events ---
 export * from './lib/events/events';

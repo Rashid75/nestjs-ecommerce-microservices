@@ -36,7 +36,7 @@ export interface OrderEnv {
   HTTP_CLIENT_TIMEOUT_MS: number;
 
   RABBITMQ_URL: string;
-  RABBITMQ_QUEUE: string;
+  RABBITMQ_EXCHANGE: string;
 }
 
 export const orderEnvSchema = Joi.object({
@@ -73,6 +73,9 @@ export const orderEnvSchema = Joi.object({
     .uri({ scheme: ['amqp', 'amqps'] })
     .required(),
 
-  // The queue every service publishes to and the Cart Service consumes from.
-  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
+  // The topic EXCHANGE. Publishers send to it; every consuming service
+  // binds its own queue to it. See the long note in
+  // libs/contracts/src/lib/events/events.ts for why this replaced the
+  // single shared queue in Milestone 10.
+  RABBITMQ_EXCHANGE: Joi.string().default('ecommerce.events'),
 });

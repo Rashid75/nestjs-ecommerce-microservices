@@ -1,3 +1,4 @@
+import { ServiceQueue } from '@ecommerce/contracts';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -29,20 +30,33 @@ async function bootstrap() {
    * same models — splitting them would mean two deployments sharing a
    * database, which is a worse boundary than the one we have.
    *
-   * `queue` must match what the publishers send to. Both come from
-   * `@ecommerce/contracts` so the two sides cannot drift.
+   * The queue is this service's OWN, and it is bound to the shared topic
+   * exchange. Both names come from one contract and one env var, so
+   * publisher and consumer cannot drift on the spelling.
    */
-  // Pulled into typed locals first. ConfigService.get returns a wide union,
+  // The exchange is shared by every service; the queue belongs to this one.
+  //
+  // Pulled into typed locals first: ConfigService.get returns a wide union,
   // and passing it straight in produces a four-level type error deep inside
   // Nest's overloads that says almost nothing useful.
   const brokerUrl: string = config.get('RABBITMQ_URL', { infer: true });
-  const queue: string = config.get('RABBITMQ_QUEUE', { infer: true });
+  const exchange: string = config.get('RABBITMQ_EXCHANGE', { infer: true });
 
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.RMQ,
     options: {
       urls: [brokerUrl],
-      queue,
+      // THIS SERVICE'S OWN QUEUE, bound to the shared exchange. Nest reads
+      // the `@EventPattern()` strings in this app and binds one routing key
+      // per handler, so this queue receives a COPY of exactly the events
+      // this service asked for — and none of the others.
+      queue: ServiceQueue.Cart,
+      exchange,
+      exchangeType: 'topic',
+      wildcards: true,
+      // Durable, so a broker restart does not discard the queue and the
+      // bindings with it. Messages published while this service is down
+      // wait here for it.
       queueOptions: { durable: true },
     },
   });
@@ -68,7 +82,12 @@ async function bootstrap() {
   // because nothing errors.
   void app
     .startAllMicroservices()
-    .then(() => Logger.log(`consuming RabbitMQ queue "${queue}"`, 'Bootstrap'))
+    .then(() =>
+      Logger.log(
+        `consuming queue "${ServiceQueue.Cart}" bound to exchange "${exchange}"`,
+        'Bootstrap',
+      ),
+    )
     .catch((error: Error) =>
       Logger.warn(
         `RabbitMQ consumer did not start (${error.message}) — catalogue flags will be stale until the broker returns`,

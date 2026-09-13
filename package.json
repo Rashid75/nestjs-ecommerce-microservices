@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "nx run-many -t serve -p api-gateway auth product inventory cart order payment --output-style=stream",
+    "start": "nx run-many -t serve -p api-gateway auth product inventory cart order payment notification --output-style=stream",
     "start:gateway": "nx serve api-gateway",
     "start:auth": "nx serve auth",
     "start:product": "nx serve product",
@@ -22,7 +22,7 @@
     "product:migrate:undo": "nx run product:migrate:undo",
     "product:migrate:status": "nx run product:migrate:status",
     "product:migration:generate": "nx run product:migration:generate --",
-    "db:migrate": "nx run-many -t migrate -p auth product inventory cart order payment",
+    "db:migrate": "nx run-many -t migrate -p auth product inventory cart order payment notification",
     "start:inventory": "nx serve inventory",
     "inventory:migrate": "nx run inventory:migrate",
     "inventory:migrate:undo": "nx run inventory:migrate:undo",
@@ -39,7 +39,11 @@
     "start:payment": "nx serve payment",
     "payment:migrate": "nx run payment:migrate",
     "payment:migrate:undo": "nx run payment:migrate:undo",
-    "payment:migrate:status": "nx run payment:migrate:status"
+    "payment:migrate:status": "nx run payment:migrate:status",
+    "start:notification": "nx serve notification",
+    "notification:migrate": "nx run notification:migrate",
+    "notification:migrate:undo": "nx run notification:migrate:undo",
+    "notification:migrate:status": "nx run notification:migrate:status"
   },
   "private": true,
   "dependencies": {
@@ -61,6 +65,7 @@
     "class-validator": "^0.15.1",
     "ioredis": "^6.0.0",
     "joi": "^18.2.5",
+    "nodemailer": "^7.0.13",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.23.0",
@@ -87,6 +92,7 @@
     "@types/bcrypt": "^6.0.0",
     "@types/jest": "~30.0.0",
     "@types/node": "^22.0.0",
+    "@types/nodemailer": "^8.0.1",
     "@types/passport-jwt": "^4.0.1",
     "dotenv": "^17.4.2",
     "eslint": "^9.8.0",

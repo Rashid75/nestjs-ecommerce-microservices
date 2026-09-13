@@ -4,12 +4,12 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 9 — Payment Service.**
-> Seven services talking synchronously over HTTP and asynchronously over
-> RabbitMQ. A customer can register, browse, fill a cart, place an order and
-> pay for it against a mock provider, with idempotent charges. Stock is
-> still not reserved at checkout — deliberate, and recorded with its trigger
-> in the plan.
+> **Current status: Milestone 10 — Notification Service (pass 1).**
+> Eight services over HTTP and RabbitMQ. A customer can register, browse,
+> fill a cart, place an order, pay for it against a mock provider, and be
+> emailed about all of it. Events now go through a **topic exchange**, so two
+> services can react to the same event — the limitation M7 wrote down and
+> M10 had to fix.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -49,16 +49,16 @@ item back.
 │  API Gateway :3000   │  public · /api · DTO validation · auth guard · routing
 └──────────┬───────────┘
            │ HTTP (axios, 5s timeout, honest failure mapping, X-User-Id)
-   ┌───────┼─────────┬───────────┬──────────┬────────────┐
-   ▼       ▼         ▼           ▼          ▼            ▼
-┌──────┐┌───────┐┌───────────┐┌────────┐┌──────────┐┌──────────┐
-│Auth  ││Product││Inventory  ││Cart    ││Order     ││Payment   │ 127.0.0.1
-│:3001 ││:3002  ││:3003      ││:3004   ││:3005     ││:3006     │
-└──┬───┘└───┬───┘└─────┬─────┘└───┬────┘└────┬─────┘└────┬─────┘
-   │        │          │          │          │           │ one layer only
-   ▼        ▼          ▼          ▼          ▼           ▼
-ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_
- auth_db   product_db inventory_db cart_db   order_db  payment_db
+   ┌──────┼────────┬─────────┬────────┬─────────┬──────────┐
+   ▼      ▼        ▼         ▼        ▼         ▼          ▼
+┌─────┐┌───────┐┌─────────┐┌──────┐┌───────┐┌───────┐┌────────────┐
+│Auth ││Product││Inventory││Cart  ││Order  ││Payment││Notification│
+│:3001││:3002  ││:3003    ││:3004 ││:3005  ││:3006  ││:3007       │
+└──┬──┘└───┬───┘└────┬────┘└──┬───┘└───┬───┘└───┬───┘└─────┬──────┘
+   ▼       ▼         ▼        ▼        ▼        ▼          ▼
+ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_ ecommerce_
+ auth_db   product_db inventory  cart_db    order_db  payment_db notification
+                       _db                                          _db
                           schema from migrations only
 
 Checkout and payment are two calls, each retryable on its own:
@@ -69,11 +69,18 @@ Checkout and payment are two calls, each retryable on its own:
    No stock is reserved yet — reserving needs an undo, and that workflow is
    deferred with a trigger written down.
 
-           RabbitMQ :5672  ·  queue ecommerce_events
+      RabbitMQ :5672  ·  TOPIC EXCHANGE ecommerce.events
   user.registered · product.price_changed · product.archived
   inventory.reserved · inventory.released
   order.confirmed · order.cancelled
   payment.succeeded · payment.failed
+
+  One durable queue per consuming service, bound to the keys it wants:
+    cart_service          ← product.* · order.confirmed
+    order_service         ← payment.succeeded · payment.failed
+    notification_service  ← user.registered · order.confirmed
+                            · payment.succeeded
+  `order.confirmed` reaches TWO of them, each with its own copy.
 
            Redis :6379
   ecom:gateway:*   rate-limit counters   REQUIRED by the gateway
@@ -207,13 +214,22 @@ ecommerce/
 │   │       ├── database/             migrations: orders + items
 │   │       └── main.ts               HYBRID: HTTP + RabbitMQ listener
 │   │
-│   └── payment/                      INTERNAL · 3006 · inspector 9235
+│   ├── payment/                      INTERNAL · 3006 · inspector 9235
+│   │   └── src/
+│   │       ├── payments/             model, repository, service, controller
+│   │       ├── provider/             the mock provider and its test tokens
+│   │       ├── orders/               reads the amount it is allowed to charge
+│   │       ├── database/             migrations: payments
+│   │       └── main.ts
+│   │
+│   └── notification/                 INTERNAL · 3007 · inspector 9236
 │       └── src/
-│           ├── payments/             model, repository, service, controller
-│           ├── provider/             the mock provider and its test tokens
-│           ├── orders/               reads the amount it is allowed to charge
-│           ├── database/             migrations: payments
-│           └── main.ts
+│           ├── notifications/        models, repository, service, read API
+│           ├── events/               the three consumers
+│           ├── mailer/               Nodemailer, log or SMTP
+│           ├── templates/            welcome · confirmation · receipt
+│           ├── database/             migrations: contacts + notifications
+│           └── main.ts               HYBRID, and mostly a consumer
 │
 ├── libs/
 │   ├── contracts/                    @ecommerce/contracts · type:lib
@@ -224,6 +240,7 @@ ecommerce/
 │   │       ├── cart/                 cart and line DTOs
 │   │       ├── orders/               order DTOs and statuses
 │   │       ├── payments/             payment DTOs, statuses, test tokens
+│   │       ├── notifications/        notification DTOs and types
 │   │       ├── events/               event patterns and payloads
 │   │       └── common/               pagination envelope
 │   ├── money/                        @ecommerce/money · type:lib
@@ -528,13 +545,41 @@ is addressed to one handler; an event says "this happened" and is addressed
 to nobody in particular. The second name would couple Auth to the existence
 of an email system.
 
-### One queue, and its limitation
+### The topic exchange, and why it arrived in M10
 
-Nest's RMQ transport is **queue-centric**: publishers send to a named queue
-and a consuming service reads from it. Simple — and it means a second
-consuming service would **compete** for the same messages rather than each
-receiving a copy. Exchanges and bindings are the answer to that, and they
-arrive when there is a second consumer that needs them.
+Through M7–M9 every event went to one queue and one service read it. That
+was simple, and it had a limitation: **RabbitMQ delivers each message in a
+queue to exactly one consumer.** A second service reading the same queue does
+not get a copy — it competes, and roughly half of every event goes to the
+wrong place.
+
+The Notification Service needs `order.confirmed`, and so does the Cart
+Service. There is no arrangement of one queue that gives both the same
+message. So publishers now publish to a **topic exchange**, and every
+consuming service declares its own durable queue bound to the routing keys it
+wants:
+
+```ts
+// publisher — knows nothing about who is listening
+{ exchange: 'ecommerce.events', exchangeType: 'topic', wildcards: true }
+
+// consumer — its own queue, bound once per @EventPattern() in the app
+{ queue: ServiceQueue.Notification, exchange: 'ecommerce.events',
+  exchangeType: 'topic', wildcards: true, queueOptions: { durable: true } }
+```
+
+`wildcards: true` is what tells Nest to use the event pattern as the
+**routing key** rather than as a queue name. **No publisher code changed** —
+only its configuration.
+
+Two replicas of one service still share that service's queue and still
+compete for its messages, which is exactly what you want when scaling out.
+Competing consumers _within_ a service is a feature; competing _across_
+services was the bug.
+
+A binding outlives the code that asked for it: deleting a handler does not
+remove its binding, so messages pile up in that queue until someone unbinds
+it by hand.
 
 ### What is deliberately not built yet
 
@@ -647,6 +692,26 @@ unknown, and a retry is the right response — the body carries `retryable` so
 a client does not have to keep its own table of which codes are worth
 repeating.
 
+### Notifications
+
+| Method | Path                 | Returns                         |
+| ------ | -------------------- | ------------------------------- |
+| `GET`  | `/api/notifications` | 200 · your emails, newest first |
+
+**There is deliberately no `POST`.** Nobody asks the Notification Service to
+send an email — it decides for itself what an event implies. An endpoint here
+would invite a business service back into issuing instructions, which is the
+coupling the service exists to remove.
+
+Emails go nowhere by default (`MAIL_TRANSPORT=log` prints the subject and
+recipient). To see real messages, start MailHog and switch the transport:
+
+```bash
+docker run -d --name ecommerce-mailhog -p 1025:1025 -p 8025:8025 mailhog/mailhog
+```
+
+Then set `MAIL_TRANSPORT=smtp` and read the mail at http://localhost:8025.
+
 ### Listing query parameters
 
 | Parameter               | Values                                 | Notes                                              |
@@ -731,18 +796,18 @@ folder 2 saves a product id, and folders 3–5 use them.
 
 ## Everyday commands
 
-| Command                                                  | What it does                                                                       |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `npm start`                                              | Serve all seven services, with streamed logs                                       |
-| `npm run start:gateway` / `start:auth` / `start:product` | One service (also `start:inventory`, `start:cart`, `start:order`, `start:payment`) |
-| `npm run stop`                                           | Kill anything left holding 3000–3006 / 9229–9235                                   |
-| `npm run db:migrate`                                     | Migrate every service's database                                                   |
-| `npm run build`                                          | Build every project into `dist/`                                                   |
-| `npm run lint`                                           | ESLint across every project                                                        |
-| `npm test`                                               | Jest across every project                                                          |
-| `npm run format`                                         | Rewrite files with Prettier                                                        |
-| `npm run graph`                                          | Open the interactive Nx project graph                                              |
-| `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                                         |
+| Command                                                  | What it does                                                                                             |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `npm start`                                              | Serve all seven services, with streamed logs                                                             |
+| `npm run start:gateway` / `start:auth` / `start:product` | One service (also `start:inventory`, `start:cart`, `start:order`, `start:payment`, `start:notification`) |
+| `npm run stop`                                           | Kill anything left holding 3000–3006 / 9229–9235                                                         |
+| `npm run db:migrate`                                     | Migrate every service's database                                                                         |
+| `npm run build`                                          | Build every project into `dist/`                                                                         |
+| `npm run lint`                                           | ESLint across every project                                                                              |
+| `npm test`                                               | Jest across every project                                                                                |
+| `npm run format`                                         | Rewrite files with Prettier                                                                              |
+| `npm run graph`                                          | Open the interactive Nx project graph                                                                    |
+| `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                                                               |
 
 ---
 

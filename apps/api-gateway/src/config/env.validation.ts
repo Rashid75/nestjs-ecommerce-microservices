@@ -23,6 +23,7 @@ export interface GatewayEnv {
   CART_SERVICE_URL: string;
   ORDER_SERVICE_URL: string;
   PAYMENT_SERVICE_URL: string;
+  NOTIFICATION_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
   PAYMENT_GATEWAY_TIMEOUT_MS: number;
 
@@ -54,6 +55,8 @@ export const gatewayEnvSchema = Joi.object({
   ORDER_SERVICE_URL: Joi.string().uri().required(),
 
   PAYMENT_SERVICE_URL: Joi.string().uri().required(),
+
+  NOTIFICATION_SERVICE_URL: Joi.string().uri().required(),
 
   // Every outbound call needs a deadline. Without one, a hung downstream
   // service holds a gateway request open indefinitely; enough of those and the

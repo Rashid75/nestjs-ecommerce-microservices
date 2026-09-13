@@ -7,6 +7,7 @@ import { CartModule } from '../cart/cart.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { OrdersModule } from '../orders/orders.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { RateLimitGuard } from '../common/rate-limit.guard';
 import type { GatewayEnv } from '../config/env.validation';
@@ -45,6 +46,7 @@ import { gatewayEnvSchema } from '../config/env.validation';
     CartModule,
     OrdersModule,
     PaymentsModule,
+    NotificationsModule,
   ],
   providers: [
     // GLOBAL, not per-controller, and that direction matters.

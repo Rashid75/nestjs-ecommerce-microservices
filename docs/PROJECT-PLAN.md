@@ -8,17 +8,17 @@ every milestone — completed work moves from _Planned_ to _Delivered_, and
 anything deliberately deferred is recorded with the **trigger** that should
 bring it back, rather than a vague "later".
 
-|                         |                                                         |
-| ----------------------- | ------------------------------------------------------- |
-| **Milestones complete** | 9 of 15                                                 |
-| **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment |
-| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                      |
-| **Databases**           | one per service, six in total                           |
-| **Next milestone**      | 10 — Notification Service                               |
+|                         |                                                                       |
+| ----------------------- | --------------------------------------------------------------------- |
+| **Milestones complete** | 9 of 15, plus pass 1 of milestone 10                                  |
+| **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
+| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                                    |
+| **Databases**           | one per service, seven in total                                       |
+| **Next**                | **M10 pass 2** — deduplicating at-least-once delivery                 |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ░░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
+M9 ██ M10 ▓░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░  ← M10 pass 1 of 2
 ```
 
 ---
@@ -77,14 +77,20 @@ Checkout, then payment — two separate calls, each retryable on its own:
    Payment ──payment.succeeded──────► RabbitMQ    the order marks itself PAID
    No stock is reserved — see the deferred table.
 
-RabbitMQ :5672   ecommerce_events queue
+RabbitMQ :5672   topic exchange ecommerce.events, one queue per consumer
    Auth      → user.registered
    Product   → product.price_changed · product.archived
    Inventory → inventory.reserved · inventory.released
    Order     → order.confirmed · order.cancelled
    Payment   → payment.succeeded · payment.failed
-   Cart      ← the catalogue events AND order.confirmed
-   Order     ← payment.succeeded (hybrid app since M9)
+   Notify    → nothing. It is purely a consumer.
+
+   queue cart_service          ← product.* · order.confirmed
+   queue order_service         ← payment.succeeded · payment.failed
+   queue notification_service  ← user.registered · order.confirmed
+                                 · payment.succeeded
+   order.confirmed goes to TWO of them, each getting its own copy — which is
+   the whole reason M10 replaced the single shared queue with an exchange.
 
 Redis :6379   ecom:gateway:*  rate-limit counters + token introspection
               ecom:product:*  cache-aside entries (optional, fails open)
@@ -621,16 +627,101 @@ move to PAID waits for the broker.
 
 ---
 
-## ⬜ Milestone 10 — Notification Service
+## 🟡 Milestone 10 — Notification Service
 
-**Next up.** RabbitMQ consumers, Nodemailer, MailHog, templates. Business services publish
-events; none of them contain email logic.
+**Pass 1 complete.** The service, the templates, and the topic exchange it
+forced. Pass 2 is deduplication, which is the reason this milestone is where
+a processed-events ledger finally earns its place.
+
+### The architectural change this milestone forced
+
+M7 built one queue and wrote down its limitation: RabbitMQ delivers each
+message in a queue to exactly ONE consumer. The Notification Service needs
+`order.confirmed`, and so does the Cart Service — on one shared queue they
+would have TAKEN TURNS, each getting roughly half.
+
+So publishers now publish to a **topic exchange**, and every consuming
+service declares its own durable queue bound to the routing keys it wants:
+
+```text
+publish "order.confirmed" ──► exchange ecommerce.events (topic)
+                                 ├──► cart_service          → cart CONVERTED
+                                 ├──► notification_service   → confirmation email
+                                 └──► order_service          no binding, no copy
+```
+
+Nest reads the `@EventPattern()` strings in each app and creates one binding
+per handler. **No publisher code changed** — only its configuration. That is
+the point of an exchange: who listens is not the publisher's business, and
+the fourth consumer will not touch them either.
+
+Two replicas of one service still share that service's queue, and therefore
+still compete — which is exactly what you want for scaling out. Competing
+consumers _within_ a service is a feature; competing _across_ services was
+the bug.
+
+### Delivered
+
+**Notification Service** (`:3007`, `ecommerce_notification_db`, inspector 9236)
+
+- Consumes `user.registered`, `order.confirmed`, `payment.succeeded`
+- Three emails: welcome, order confirmation, payment receipt — plain
+  functions, both a text and an HTML part
+- **Nodemailer with two transports**: `log` (the default, so the stack runs
+  with nothing extra installed) and `smtp` for MailHog
+- `GET /notifications` — read only. There is deliberately no `POST`
+- The first service in the system that calls nothing and publishes nothing
+
+**`contacts` — a projection.** An order confirmation needs an email address,
+and `order.confirmed` carries only a user id, because the Order Service has
+only a user id. The three ways out:
+
+|                                 | Cost                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Call the Auth Service per email | a synchronous hop on the critical path of every receipt                                                   |
+| Put the address in every event  | Order and Payment would each have to call Auth to enrich their own events — the hop moves, it does not go |
+| **Keep a local copy** (this)    | the copy can be stale, and a customer who registered before this service existed has no row               |
+
+The third is the standard answer to "a consumer needs data it does not own",
+and its costs are written down rather than discovered.
+
+### Key decisions
+
+| Decision                                     | Why                                                                                                                                                                                                |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Emails live in their own service**         | `user.registered` is a fact; "send a welcome email" is an instruction. The moment Auth issues instructions it has to know an email system exists, then an SMS system, then who opted out of which. |
+| **Topic exchange, one queue per service**    | The only arrangement where two services can both receive the same event.                                                                                                                           |
+| **Queue names are constants, not config**    | A queue name identifies _who is consuming_, which is a property of the code, not of the environment.                                                                                               |
+| **`MAIL_TRANSPORT=log` by default**          | Defaulting to SMTP means every receipt fails until someone starts a mail server, and the failure looks like a bug in this service rather than a missing container.                                 |
+| **A send failure is recorded, never thrown** | Throwing out of a handler makes Nest nack and RabbitMQ redeliver — retrying a bad address forever, and re-sending an email that may already have gone out.                                         |
+| **The body is stored, and never logged**     | "What did we send them?" needs an answer; an application log is read by more people and kept longer than anyone intends.                                                                           |
+| **No contact → a FAILED row**                | An email nobody received is exactly what support needs to be able to find. Silently skipping it is the one unacceptable option.                                                                    |
+
+### Deliberately NOT built — pass 2
+
+| Not built                               | The failure it answers                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A processed-events ledger**           | RabbitMQ delivers at-least-once, so a redelivered `order.confirmed` sends a SECOND confirmation. Every other consumer survived that by being naturally repeatable — `UPDATE … WHERE status = 'ACTIVE'` does nothing twice. **There is no WHERE clause that un-sends an email.** This is the first place the ledger is genuinely needed, and it needs events to carry an id, which they do not yet. |
+| **Retry of a failed send**              | A send that fails is recorded FAILED and left there. Nothing tries again and nothing tells anyone.                                                                                                                                                                                                                                                                                                 |
+| **Notification preferences**            | Every customer gets every email. Anything beyond strictly transactional mail needs opt-outs first.                                                                                                                                                                                                                                                                                                 |
+| **`order.shipped` / `order.delivered`** | Nothing publishes them — there is no fulfilment workflow yet.                                                                                                                                                                                                                                                                                                                                      |
+
+### Verified
+
+118 unit tests across eleven projects; all eight services build and lint.
+
+> ⚠️ **The exchange needs one runtime check.** Every publisher and consumer was
+> reconfigured, and the bindings are only created when the services connect to
+> a live broker. Start RabbitMQ, run a checkout, and confirm in the management
+> UI at :15672 that `ecommerce.events` exists with three queues bound to it.
+> The old `ecommerce_events` queue from M7 is now unused and can be deleted
+> there.
 
 ---
 
 ## ⬜ Milestone 11 — Observability
 
-Pino structured logging, correlation IDs, OpenTelemetry traces and metrics,
+**Next milestone.** Pino structured logging, correlation IDs, OpenTelemetry traces and metrics,
 SigNoz. The goal: understand where a request spent its time across services.
 
 ---
@@ -703,8 +794,9 @@ exists so that "not yet" never quietly becomes "never".
 | **Transactional outbox**           | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                          | M10             |
 | **Idempotency-Key on checkout**    | A double-clicked checkout is seen creating two orders. The window is small — the second click usually finds an empty cart.                           | when observed   |
 | **Idempotent inventory commands**  | A retried `reserve` double-reserves. Key the command on its `reference`.                                                                             | M9/M12          |
-| **Processed-events ledger**        | A consumer whose work is not naturally repeatable — sending an email, charging a card.                                                               | M10             |
-| **Topic exchange with bindings**   | A second service needing its own copy of `order.confirmed`. Today one queue means consumers would COMPETE.                                           | M10             |
+| **Processed-events ledger**        | Delivered twice, an email is sent twice — and no WHERE clause un-sends one. The first consumer that is not naturally repeatable.                     | **M10 pass 2**  |
+| **Retry of a failed email**        | A send that fails is recorded and left. Nothing tries again.                                                                                         | **M10 pass 2**  |
+| **Notification preferences**       | Anything beyond strictly transactional email needs opt-outs before it is sent.                                                                       | before launch   |
 | **Event envelope**                 | With the outbox — an `eventId` is what deduplication needs. Correlation ids follow in M11.                                                           | with the outbox |
 | **Payment reconciliation**         | A payment stuck PENDING blocks its order and nobody is told. Ask the provider what happened to it.                                                   | when one sticks |
 | **Refunds**                        | A cancelled order that was paid for. Today the log says a refund is needed and a human arranges it.                                                  | M10 candidate   |
@@ -732,14 +824,15 @@ Every PostgreSQL database **and role** is prefixed `ecommerce_`. Databases are
 per-cluster; roles are cluster-wide, so the prefix is what keeps `\du`
 readable on a server shared with other projects.
 
-| Service   | Database                 | Role                          | Status               |
-| --------- | ------------------------ | ----------------------------- | -------------------- |
-| Auth      | `ecommerce_auth_db`      | `ecommerce_auth_service`      | ✅ created, migrated |
-| Product   | `ecommerce_product_db`   | `ecommerce_product_service`   | ✅ created, migrated |
-| Inventory | `ecommerce_inventory_db` | `ecommerce_inventory_service` | ✅ created, migrated |
-| Cart      | `ecommerce_cart_db`      | `ecommerce_cart_service`      | ✅ created, migrated |
-| Order     | `ecommerce_order_db`     | `ecommerce_order_service`     | ⏳ migration written |
-| Payment   | `ecommerce_payment_db`   | `ecommerce_payment_service`   | ⏳ migration written |
+| Service      | Database                    | Role                             | Status               |
+| ------------ | --------------------------- | -------------------------------- | -------------------- |
+| Auth         | `ecommerce_auth_db`         | `ecommerce_auth_service`         | ✅ created, migrated |
+| Product      | `ecommerce_product_db`      | `ecommerce_product_service`      | ✅ created, migrated |
+| Inventory    | `ecommerce_inventory_db`    | `ecommerce_inventory_service`    | ✅ created, migrated |
+| Cart         | `ecommerce_cart_db`         | `ecommerce_cart_service`         | ✅ created, migrated |
+| Order        | `ecommerce_order_db`        | `ecommerce_order_service`        | ⏳ migration written |
+| Payment      | `ecommerce_payment_db`      | `ecommerce_payment_service`      | ⏳ migration written |
+| Notification | `ecommerce_notification_db` | `ecommerce_notification_service` | ⏳ migration written |
 
 ## Port inventory
 
@@ -752,7 +845,8 @@ readable on a server shared with other projects.
 | Cart             | 3004 | 9233           |
 | Order            | 3005 | 9234           |
 | Payment          | 3006 | 9235           |
-| _(next service)_ | 3007 | 9236           |
+| Notification     | 3007 | 9236           |
+| _(next service)_ | 3008 | 9237           |
 
 Each service needs its own inspector port. `@nx/js:node` defaults every one of
 them to 9229, and the collision stops the second service booting with an error

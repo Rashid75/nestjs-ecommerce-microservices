@@ -1,9 +1,9 @@
 # Database Schema
 
-Every table in the system as of **Milestone 9**, taken from the
+Every table in the system as of **Milestone 10, pass 1**, taken from the
 migrations — the migrations are the source of truth, not this file.
 
-**Six databases, one per service.** No service holds credentials for
+**Seven databases, one per service.** No service holds credentials for
 another's database, so "no service reads another service's tables" is a fact
 about the deployment rather than a promise about the code.
 
@@ -14,6 +14,7 @@ ecommerce_inventory_db   inventory_items · stock_movements
 ecommerce_cart_db        carts · cart_items
 ecommerce_order_db       orders · order_items
 ecommerce_payment_db     payments
+ecommerce_notification_db  contacts · notifications
 ```
 
 ---
@@ -157,6 +158,28 @@ erDiagram
         timestamptz updated_at
     }
 
+    contacts {
+        uuid user_id PK "the projected user IS the key"
+        varchar_320 email "from user.registered"
+        varchar_100 first_name
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    notifications {
+        uuid id PK
+        uuid user_id "no FK to contacts, on purpose"
+        varchar_30 type "WELCOME | ORDER_CONFIRMED | PAYMENT_RECEIPT"
+        varchar_20 status "SENT | FAILED"
+        varchar_320 recipient "where it WENT, not where it would go now"
+        varchar_200 subject
+        text body "what was actually sent"
+        text failure_reason
+        timestamptz sent_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
     categories ||--o{ products : "has"
     inventory_items ||--o{ stock_movements : "explained by"
     carts ||--o{ cart_items : "contains"
@@ -170,6 +193,8 @@ erDiagram
     carts ||..o{ orders : "cart_id, no FK"
     orders ||..o{ payments : "order_id, no FK"
     users ||..o{ payments : "user_id, no FK"
+    users ||..o| contacts : "projected from user.registered"
+    contacts ||..o{ notifications : "user_id, deliberately no FK"
 ```
 
 ---
@@ -363,6 +388,58 @@ the right failure, and the trigger for the reconciliation job.
 
 ---
 
+### `ecommerce_notification_db`
+
+```text
+contacts                     A PROJECTION, built from user.registered
+  user_id     uuid PK        the projected user IS the key
+  email       varchar(320)
+  first_name  varchar(100)
+  created_at  timestamptz
+  updated_at  timestamptz
+
+notifications                one row per email, sent or not
+  id              uuid PK
+  user_id         uuid          ── deliberately NO FK to contacts
+  type            varchar(30)   CHECK IN (WELCOME, ORDER_CONFIRMED,
+                                          PAYMENT_RECEIPT)
+  status          varchar(20)   CHECK IN (SENT, FAILED)
+  recipient       varchar(320)  where it WENT
+  subject         varchar(200)
+  body            text          what was actually sent
+  failure_reason  text
+  sent_at         timestamptz
+  created_at      timestamptz
+  updated_at      timestamptz
+```
+
+**Why this service keeps its own copy of a user.** An order confirmation
+needs an email address, and `order.confirmed` carries only a user id —
+because the Order Service has only a user id. Calling the Auth Service per
+email would put it on the critical path of every receipt; enriching the event
+would just move that call into the publisher. So this service listens to
+`user.registered` and remembers. That is a **projection**: a small, private
+read model built from events, and the standard answer to "a consumer needs
+data it does not own".
+
+Its costs are real: the copy goes stale until a `user.updated` event exists,
+and a customer who registered before this service did has no row at all —
+recorded as a FAILED notification with a reason, never silently skipped.
+
+**No foreign key from `notifications` to `contacts`**, though both live here.
+"We emailed this person" is a fact about the past; a CASCADE would delete the
+evidence along with the contact. `recipient` is stored per row for the same
+reason the cart snapshots a price: the address it went to is a fact, the
+contact's current address is not.
+
+**Missing on purpose, until pass 2:** a `processed_events` table. Every other
+consumer in this system survives at-least-once delivery by being naturally
+repeatable. Sending an email cannot be — there is no WHERE clause that
+un-sends one — so this is the first place a ledger of processed event ids is
+genuinely needed.
+
+---
+
 ## Things worth noticing across the whole schema
 
 **Money is `DECIMAL(12,2)`, never `FLOAT`, and crosses the wire as a string.**
@@ -392,7 +469,13 @@ to enforce RESTRICT.
 
 ## Still to come
 
-Milestone 10 adds a Notification Service with its own database, and the
-first table this system will need for **idempotent consumption** — a ledger
-of processed event ids, because sending an email is not an operation you can
-make naturally repeatable the way `UPDATE … WHERE status = 'ACTIVE'` is.
+Pass 2 of Milestone 10 adds one table to `ecommerce_notification_db`:
+
+```text
+processed_events   event_id uuid PRIMARY KEY, plus when it was handled
+```
+
+An INSERT that violates that primary key is the handler saying "I have
+already done this one" — which is how a consumer whose work cannot be
+repeated survives being delivered the same message twice. It needs events to
+carry an id first, so an envelope arrives with it.

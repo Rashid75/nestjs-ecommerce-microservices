@@ -26,7 +26,7 @@ export interface PaymentEnv {
   PAYMENT_PROVIDER_TIMEOUT_MS: number;
 
   RABBITMQ_URL: string;
-  RABBITMQ_QUEUE: string;
+  RABBITMQ_EXCHANGE: string;
 }
 
 export const paymentEnvSchema = Joi.object({
@@ -76,5 +76,10 @@ export const paymentEnvSchema = Joi.object({
   RABBITMQ_URL: Joi.string()
     .uri({ scheme: ['amqp', 'amqps'] })
     .required(),
-  RABBITMQ_QUEUE: Joi.string().default('ecommerce_events'),
+
+  // The topic EXCHANGE. Publishers send to it; every consuming service
+  // binds its own queue to it. See the long note in
+  // libs/contracts/src/lib/events/events.ts for why this replaced the
+  // single shared queue in Milestone 10.
+  RABBITMQ_EXCHANGE: Joi.string().default('ecommerce.events'),
 });

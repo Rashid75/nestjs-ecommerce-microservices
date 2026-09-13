@@ -1493,7 +1493,169 @@
       ]
     },
     {
-      "name": "7 · Cleanup",
+      "name": "7 · Notifications",
+      "description": "Milestone 10, pass 1. Every step of the earlier folders quietly sent an email; this folder is where you see them.\n\n| Event | Email |\n| --- | --- |\n| `user.registered` | welcome |\n| `order.confirmed` | order confirmation |\n| `payment.succeeded` | payment receipt |\n\nNothing asked for those. The Notification Service listens to facts and decides for itself what they imply — which is why there is no `POST /notifications`.\n\n**By default nothing is actually sent.** `MAIL_TRANSPORT=log` prints the subject and recipient to the service log. To see real messages, start MailHog, set `MAIL_TRANSPORT=smtp` in `.env`, restart, and read them at http://localhost:8025:\n\n```bash\ndocker run -d --name ecommerce-mailhog -p 1025:1025 -p 8025:8025 mailhog/mailhog\n```\n\n**Run folders 1 → 6 first.** The welcome email needs a registration that happened while this service was running, so re-run folder 1 if the stack was started after you registered.",
+      "item": [
+        {
+          "name": "GET /notifications — everything sent to you",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "// Handy for the next request: how many the service thinks it has sent.",
+                  "pm.environment.set('notificationCount', String(b.meta.total));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "notifications"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Newest first. After folders 1 → 6 you should see a WELCOME, one or more ORDER_CONFIRMED, and a PAYMENT_RECEIPT.\n\nEach row records the address it went TO — not the contact’s current address — for the same reason a cart line snapshots a price: where it went is a fact."
+          }
+        },
+        {
+          "name": "Only the receipts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "notifications"],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "PAYMENT_RECEIPT"
+                }
+              ]
+            },
+            "description": "The type is named after the BUSINESS EVENT, not after the template — `PAYMENT_RECEIPT`, not `receipt-email-v2`. Naming these after templates means a redesign becomes a contract change."
+          }
+        },
+        {
+          "name": "⚠ Anything that FAILED to send",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "notifications"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "FAILED"
+                }
+              ]
+            },
+            "description": "Usually empty with `MAIL_TRANSPORT=log`.\n\nTwo ways to make it non-empty, both worth doing once:\n\n1. Set `MAIL_TRANSPORT=smtp` **without** starting MailHog. The send fails, the row is recorded FAILED with `ECONNREFUSED`, and nothing throws — because throwing out of a message handler would make RabbitMQ redeliver and retry a broken address forever.\n\n2. Place an order as a user who registered **before** the Notification Service was ever started. It has no contact row for them, so it records a FAILED notification saying exactly that instead of silently skipping it."
+          }
+        },
+        {
+          "name": "Place another order — watch the email follow",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.environment.set('orderId', b.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders"]
+            },
+            "description": "Add something to the cart first if it is empty (folder 4). Then re-run the first request in this folder: a new ORDER_CONFIRMED appears a moment later.\n\nWatch the Cart Service log at the same time. **Both** services received this one event, each with its own copy — the cart converted itself and the notification service emailed. On the single shared queue this project used until M10, they would have taken turns."
+          }
+        },
+        {
+          "name": "⚠ Two confirmations for one order — still open",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "notifications"],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "ORDER_CONFIRMED"
+                }
+              ]
+            },
+            "description": "**Not a bug to report — the thing to notice.**\n\nRabbitMQ delivers at-least-once, so this handler will eventually run twice for the same message and the customer gets two confirmations. To force it: stop the Notification Service mid-handler, or requeue the message from the management UI at :15672.\n\nEvery other consumer in this system survives that by being naturally repeatable — `UPDATE carts SET status='CONVERTED' WHERE status='ACTIVE'` does nothing the second time. **There is no WHERE clause that un-sends an email.**\n\nThat is why pass 2 adds a `processed_events` ledger here and nowhere else, and why the events need to carry an id first."
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 · Cleanup",
       "description": "Run last, or not at all. Deleting the product makes the Inventory, Cart and Orders folders fail until the Catalogue folder is run again.",
       "item": [
         {

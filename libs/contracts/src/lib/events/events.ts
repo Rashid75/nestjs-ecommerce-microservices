@@ -46,18 +46,52 @@ export type EventPatternValue =
 export const EVENTS_CLIENT = 'EVENTS_CLIENT';
 
 /**
- * The queue every event goes to.
+ * The topic EXCHANGE every event is published to.
  *
- * ONE QUEUE, and it is worth being clear about why. Nest's RMQ transport is
- * QUEUE-centric: a publisher sends to a named queue and a consuming service
- * reads from it. That is the simple model, and it has a real limitation —
- * if a second service also wanted these events, the two would COMPETE for
- * messages rather than each receiving a copy.
+ * WHY THIS REPLACED A SINGLE QUEUE, IN MILESTONE 10. Through M7–M9 every
+ * event went to one queue, `ecommerce_events`, and one service read it. That
+ * was simple and it had a limitation written down at the time: RabbitMQ
+ * delivers each message in a queue to exactly ONE consumer. A second
+ * consuming service reading the same queue does not get a copy — it COMPETES
+ * for messages, and roughly half of every event goes to the wrong service.
  *
- * Exchanges and bindings are the answer to that, and they arrive when we
- * have a second consumer that needs them. Not before.
+ * The Notification Service is that second consumer. It needs
+ * `order.confirmed`, and so does the Cart Service. There is no arrangement
+ * of one queue that gives both of them the same message.
+ *
+ * So publishers now publish to a topic exchange, and every consuming service
+ * declares its OWN queue bound to the routing keys it cares about. The
+ * exchange copies each message into every queue whose binding matches:
+ *
+ *   publish "order.confirmed" ──► exchange ecommerce.events (topic)
+ *                                    ├──► cart_service         (has a binding)
+ *                                    ├──► notification_service (has a binding)
+ *                                    └──► order_service        (no binding, no copy)
+ *
+ * NOTHING IN THE PUBLISHERS CHANGED except this configuration. That is the
+ * point of an exchange: who listens is not the publisher's business, and
+ * adding the fourth consumer will not touch them either.
  */
-export const EVENTS_QUEUE = 'ecommerce_events';
+export const EVENTS_EXCHANGE = 'ecommerce.events';
+
+/**
+ * One durable queue per CONSUMING SERVICE.
+ *
+ * Not per event type, and not per instance. Two replicas of the Cart Service
+ * share `cart_service` and therefore COMPETE for its messages — which is
+ * exactly what you want for scaling out: each message is handled once, by
+ * whichever replica is free. Competing consumers within a service is a
+ * feature; competing consumers across services was the bug.
+ *
+ * The names are constants rather than configuration because a queue name
+ * identifies WHO is consuming, which is a property of the code, not of the
+ * environment it runs in.
+ */
+export const ServiceQueue = {
+  Cart: 'cart_service',
+  Order: 'order_service',
+  Notification: 'notification_service',
+} as const;
 
 // ─────────────────────────── payloads ───────────────────────────
 //

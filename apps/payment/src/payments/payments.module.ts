@@ -34,14 +34,22 @@ import { PaymentsService } from './payments.service';
         inject: [ConfigService],
         useFactory: (config: ConfigService<PaymentEnv, true>): RmqOptions => {
           const url: string = config.get('RABBITMQ_URL', { infer: true });
-          const queue: string = config.get('RABBITMQ_QUEUE', { infer: true });
+          const exchange: string = config.get('RABBITMQ_EXCHANGE', {
+            infer: true,
+          });
 
           return {
             transport: Transport.RMQ,
             options: {
               urls: [url],
-              queue,
-              queueOptions: { durable: true },
+              // Published to the EXCHANGE, not to a queue. The publisher does
+              // not know or care which services have bound a queue to it.
+              exchange,
+              exchangeType: 'topic',
+              // Tells Nest to use the event pattern as the ROUTING KEY, so
+              // "order.confirmed" is routed by the broker rather than being
+              // the name of a queue.
+              wildcards: true,
             },
           };
         },
