@@ -4,6 +4,7 @@ import { NotificationEventsController } from '../events/notification-events.cont
 import { MailerModule } from '../mailer/mailer.module';
 import { Contact } from './contact.model';
 import { Notification } from './notification.model';
+import { ProcessedEvent } from './processed-event.model';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsRepository } from './notifications.repository';
 import { NotificationsService } from './notifications.service';
@@ -17,7 +18,10 @@ import { NotificationsService } from './notifications.service';
  * nothing downstream reacts to it.
  */
 @Module({
-  imports: [SequelizeModule.forFeature([Contact, Notification]), MailerModule],
+  imports: [
+    SequelizeModule.forFeature([Contact, Notification, ProcessedEvent]),
+    MailerModule,
+  ],
   // One HTTP controller and one message controller. Same class shape; only
   // the decorator on the handlers differs.
   controllers: [NotificationsController, NotificationEventsController],

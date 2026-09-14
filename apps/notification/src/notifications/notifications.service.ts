@@ -1,5 +1,6 @@
 import {
   buildPageMeta,
+  EventPattern,
   NotificationDto,
   NotificationStatus,
   NotificationType,
@@ -51,19 +52,25 @@ const DEFAULT_PAGE_SIZE = 20;
  * So the business services state facts, and this service decides what a fact
  * implies. Adding SMS later touches nothing but this app.
  *
- * WHAT IT DELIBERATELY DOES NOT DO YET — pass 2:
+ * EXACTLY ONCE, BY RECOGNISING THE REPEAT. RabbitMQ delivers at least once,
+ * so every handler here WILL be given the same message twice eventually.
+ * Every other consumer in this system survives that by being naturally
+ * repeatable — a conditional UPDATE does nothing the second time. An email
+ * cannot be: there is no WHERE clause that un-sends one.
  *
- *   NO DEDUPLICATION. RabbitMQ delivers at-least-once, so a redelivered
- *   `order.confirmed` sends a second confirmation. Every other consumer in
- *   this system survived that by being naturally repeatable; an email cannot
- *   be. This is the first place a processed-events ledger is genuinely
- *   needed, and it needs the events to carry an id — which they do not.
+ * So this service claims each `eventId` in a ledger before it acts, and a
+ * second delivery finds the claim already taken. See `handleOnce` for the
+ * trade that ordering makes.
+ *
+ * STILL NOT BUILT:
  *
  *   NO RETRY. A send that fails is recorded FAILED and left alone. Nothing
  *   tries again, and nothing tells anyone.
  *
  *   NO PREFERENCES. Every customer gets every email. A real system needs
  *   opt-outs before it sends anything that is not strictly transactional.
+ *
+ *   NO RETENTION on the ledger. One row per event, forever.
  */
 @Injectable()
 export class NotificationsService {
@@ -83,21 +90,41 @@ export class NotificationsService {
    * confirmation.
    */
   async onUserRegistered(user: UserRegisteredPayload): Promise<void> {
+    // The contact is written OUTSIDE the claim, deliberately. It is an
+    // upsert — naturally repeatable — and it is what every later email
+    // depends on, so a duplicate delivery doing it twice is harmless while a
+    // duplicate delivery skipping it would not be.
     await this.notifications.upsertContact({
       userId: user.userId,
       email: user.email,
       firstName: user.firstName,
     });
 
-    await this.deliver(
-      user.userId,
-      NotificationType.Welcome,
-      user.email,
-      welcomeEmail(user),
+    await this.handleOnce(user.eventId, EventPattern.UserRegistered, () =>
+      this.deliver(
+        user.userId,
+        NotificationType.Welcome,
+        user.email,
+        welcomeEmail(user),
+      ),
     );
   }
 
   async onOrderConfirmed(order: OrderConfirmedPayload): Promise<void> {
+    await this.handleOnce(order.eventId, EventPattern.OrderConfirmed, () =>
+      this.sendOrderConfirmation(order),
+    );
+  }
+
+  async onPaymentSucceeded(payment: PaymentSucceededPayload): Promise<void> {
+    await this.handleOnce(payment.eventId, EventPattern.PaymentSucceeded, () =>
+      this.sendReceipt(payment),
+    );
+  }
+
+  private async sendOrderConfirmation(
+    order: OrderConfirmedPayload,
+  ): Promise<void> {
     const contact = await this.notifications.findContact(order.userId);
 
     if (contact === null) {
@@ -120,7 +147,7 @@ export class NotificationsService {
     );
   }
 
-  async onPaymentSucceeded(payment: PaymentSucceededPayload): Promise<void> {
+  private async sendReceipt(payment: PaymentSucceededPayload): Promise<void> {
     const contact = await this.notifications.findContact(payment.userId);
 
     if (contact === null) {
@@ -155,6 +182,60 @@ export class NotificationsService {
       data: rows.map(toDto),
       meta: buildPageMeta(page, limit, total),
     };
+  }
+
+  /**
+   * Runs the work once per event id, however many times it is delivered.
+   *
+   * THE CLAIM COMES FIRST, and the ordering is a real trade with two
+   * possible failures:
+   *
+   *   CLAIM, then send   the process dies in between and the email is never
+   *                      sent — because the redelivery finds the claim taken
+   *                      and skips it. ONE MISSED EMAIL. (this)
+   *
+   *   SEND, then claim   the process dies in between and the redelivery
+   *                      sends a SECOND email, every time.
+   *
+   * There is no third option: the send is an external side effect and cannot
+   * join a database transaction, which is the same shape as the
+   * publish-versus-commit problem in the Order Service. We take the first,
+   * because a customer who is missing a receipt can find it in
+   * `GET /notifications` and support can resend it, whereas a customer who
+   * gets the same receipt three times concludes the shop is broken.
+   *
+   * The claim is RELEASED if the work throws, so an unexpected failure — the
+   * database refusing a write, say — does not permanently swallow the event.
+   * Note what is not released: a send that merely FAILED. That is recorded,
+   * not thrown, and it stays claimed on purpose, because redelivering it
+   * would retry a bad address forever. A deliberate retry is pass 3's job,
+   * if it ever earns one.
+   */
+  private async handleOnce(
+    eventId: string,
+    pattern: string,
+    work: () => Promise<void>,
+  ): Promise<void> {
+    const claimed = await this.notifications.claimEvent(eventId, pattern);
+
+    if (!claimed) {
+      // The ordinary case, not an error. At-least-once delivery makes this
+      // routine, which is why it is logged at debug.
+      this.logger.debug(
+        `${pattern} ${eventId.slice(0, 8)}: already handled, skipping`,
+      );
+      return;
+    }
+
+    try {
+      await work();
+    } catch (error) {
+      await this.notifications.releaseEvent(eventId);
+      this.logger.error(
+        `${pattern} ${eventId.slice(0, 8)}: handler failed, claim released for redelivery`,
+      );
+      throw error;
+    }
   }
 
   /**

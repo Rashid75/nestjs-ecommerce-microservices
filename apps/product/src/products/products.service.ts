@@ -8,6 +8,7 @@ import {
   ProductStatus,
   QueryProductsDto,
   UpdateProductDto,
+  newEventId,
 } from '@ecommerce/contracts';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -241,6 +242,7 @@ export class ProductsService {
 
     if (before.price !== after.price) {
       this.events.emit(EventPattern.ProductPriceChanged, {
+        eventId: newEventId(),
         productId: after.id,
         sku: after.sku,
         previousPrice: before.price,
@@ -254,6 +256,7 @@ export class ProductsService {
       after.status === ProductStatus.Archived
     ) {
       this.events.emit(EventPattern.ProductArchived, {
+        eventId: newEventId(),
         productId: after.id,
         sku: after.sku,
       });

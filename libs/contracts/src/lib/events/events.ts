@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * The event contracts every service agrees on.
  *
@@ -93,6 +95,56 @@ export const ServiceQueue = {
   Notification: 'notification_service',
 } as const;
 
+/**
+ * What every event payload carries, on top of its own data.
+ *
+ * ONE FIELD, and it took until Milestone 10 to need it.
+ *
+ * RabbitMQ delivers AT LEAST ONCE. Every consumer in this system has always
+ * had to survive being handed the same message twice, and until now every
+ * one of them did it the cheap way — by being naturally repeatable.
+ * `UPDATE carts SET status='CONVERTED' WHERE status='ACTIVE'` does nothing
+ * the second time. `UPDATE orders SET status='PAID' WHERE status='CONFIRMED'`
+ * does nothing the second time. Neither needs to know it has seen the
+ * message before, so neither needs an id.
+ *
+ * SENDING AN EMAIL CANNOT BE MADE REPEATABLE. There is no WHERE clause that
+ * un-sends one, and the customer simply receives two receipts. The only way
+ * out is for the consumer to RECOGNISE the repeat — and to recognise it, the
+ * message has to be identifiable.
+ *
+ * Which is why this is not an envelope. There is no `{ meta, data }`
+ * wrapper, no version, no timestamp, no correlation id: each of those solves
+ * a problem, and only this one has a problem today. The correlation id
+ * arrives in M11 with tracing, and it will be worth its own field then.
+ */
+export interface EventMeta {
+  /**
+   * Unique per PUBLISHED event, not per delivery.
+   *
+   * That distinction is the whole mechanism. The broker may hand the same
+   * message to a consumer any number of times, and every one of those
+   * deliveries carries the SAME `eventId` — so a consumer that has recorded
+   * the id knows it has already done the work, no matter how many copies
+   * arrive.
+   *
+   * It is generated where the event is published, once. A consumer that
+   * generated its own would be numbering deliveries, which is exactly the
+   * thing it must not do.
+   */
+  eventId: string;
+}
+
+/**
+ * A fresh event id.
+ *
+ * A v4 UUID: no coordination needed between the five publishing services,
+ * and no chance of two of them minting the same one.
+ */
+export function newEventId(): string {
+  return randomUUID();
+}
+
 // ─────────────────────────── payloads ───────────────────────────
 //
 // Just the data. No envelope, no eventId, no version field.
@@ -102,13 +154,13 @@ export const ServiceQueue = {
 // for now, because every one of them exists to solve a problem we have not
 // met yet. They arrive when the lesson calls for them.
 
-export interface UserRegisteredPayload {
+export interface UserRegisteredPayload extends EventMeta {
   userId: string;
   email: string;
   firstName: string;
 }
 
-export interface ProductPriceChangedPayload {
+export interface ProductPriceChangedPayload extends EventMeta {
   productId: string;
   sku: string;
   /** Exact decimal strings. Never floats — money is never a JS number. */
@@ -116,18 +168,18 @@ export interface ProductPriceChangedPayload {
   newPrice: string;
 }
 
-export interface ProductArchivedPayload {
+export interface ProductArchivedPayload extends EventMeta {
   productId: string;
   sku: string;
 }
 
-export interface StockReservedPayload {
+export interface StockReservedPayload extends EventMeta {
   productId: string;
   quantity: number;
   available: number;
 }
 
-export interface StockReleasedPayload {
+export interface StockReleasedPayload extends EventMeta {
   productId: string;
   quantity: number;
   available: number;
@@ -149,7 +201,7 @@ export interface OrderLinePayload {
  * later, `order.created` becomes a separate, earlier fact — and consumers
  * that care about a FINISHED order keep listening to this one, unchanged.
  */
-export interface OrderConfirmedPayload {
+export interface OrderConfirmedPayload extends EventMeta {
   orderId: string;
   orderNumber: string;
   userId: string;
@@ -171,7 +223,7 @@ export interface OrderConfirmedPayload {
   lines: OrderLinePayload[];
 }
 
-export interface OrderCancelledPayload {
+export interface OrderCancelledPayload extends EventMeta {
   orderId: string;
   orderNumber: string;
   userId: string;
@@ -185,7 +237,7 @@ export interface OrderCancelledPayload {
  * poll the Payment Service and the Payment Service does not write orders —
  * each owns its own database, so the only thing that crosses is a fact.
  */
-export interface PaymentSucceededPayload {
+export interface PaymentSucceededPayload extends EventMeta {
   paymentId: string;
   reference: string;
   orderId: string;
@@ -203,7 +255,7 @@ export interface PaymentSucceededPayload {
  * a provider timeout might not. Anything reacting to this — a dunning email,
  * an alert, an automatic retry — needs to know which it was.
  */
-export interface PaymentFailedPayload {
+export interface PaymentFailedPayload extends EventMeta {
   paymentId: string;
   reference: string;
   orderId: string;

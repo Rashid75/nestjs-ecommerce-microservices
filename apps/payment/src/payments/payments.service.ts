@@ -10,6 +10,7 @@ import {
   QueryPaymentsDto,
   type PaymentFailedPayload,
   type PaymentSucceededPayload,
+  newEventId,
 } from '@ecommerce/contracts';
 import {
   ConflictException,
@@ -163,6 +164,7 @@ export class PaymentsService {
       );
 
       this.events.emit(EventPattern.PaymentSucceeded, {
+        eventId: newEventId(),
         paymentId: settled.id,
         reference: settled.reference,
         orderId: settled.orderId,
@@ -384,6 +386,7 @@ export class PaymentsService {
 
   private emitFailure(payment: PaymentRecord, userId: string): void {
     this.events.emit(EventPattern.PaymentFailed, {
+      eventId: newEventId(),
       paymentId: payment.id,
       reference: payment.reference,
       orderId: payment.orderId,

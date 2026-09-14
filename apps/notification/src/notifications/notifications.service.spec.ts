@@ -15,14 +15,21 @@ import { NotificationsService } from './notifications.service';
  *      throwing would make RabbitMQ redeliver and re-send
  *   ✅ the rendered email carries the order number and an exact total
  *
- *   ❌ nothing here proves a duplicate delivery sends one email. It sends
- *      two, deliberately, until pass 2.
+ *   ✅ a second delivery of the same event sends nothing
+ *
+ *   ❌ that the ledger holds under real concurrency. The primary key is what
+ *      makes that true, and only a real database can prove it.
  */
 const USER_ID = '22222222-2222-4222-8222-222222222222';
+const EVENT_ID = '55555555-5555-4555-8555-555555555555';
 const ORDER_ID = '33333333-3333-4333-8333-333333333333';
 
 function build() {
   const repo = {
+    // Claims succeed by default: the ordinary case is an event nobody has
+    // handled yet.
+    claimEvent: jest.fn().mockResolvedValue(true),
+    releaseEvent: jest.fn().mockResolvedValue(undefined),
     upsertContact: jest.fn().mockResolvedValue(undefined),
     findContact: jest.fn().mockResolvedValue({
       userId: USER_ID,
@@ -50,6 +57,7 @@ describe('NotificationsService.onUserRegistered', () => {
     const { service, repo, mailer } = build();
 
     await service.onUserRegistered({
+      eventId: EVENT_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: 'Ada',
@@ -71,6 +79,7 @@ describe('NotificationsService.onUserRegistered', () => {
     const { service, mailer } = build();
 
     await service.onUserRegistered({
+      eventId: EVENT_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: 'Ada',
@@ -88,6 +97,7 @@ describe('NotificationsService.onUserRegistered', () => {
     const { service, mailer } = build();
 
     await service.onUserRegistered({
+      eventId: EVENT_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: '   ',
@@ -100,6 +110,7 @@ describe('NotificationsService.onUserRegistered', () => {
 
 describe('NotificationsService.onOrderConfirmed', () => {
   const order = {
+    eventId: EVENT_ID,
     orderId: ORDER_ID,
     orderNumber: 'ORD-00000042',
     userId: USER_ID,
@@ -166,6 +177,7 @@ describe('NotificationsService.onPaymentSucceeded', () => {
     const { service, mailer } = build();
 
     await service.onPaymentSucceeded({
+      eventId: EVENT_ID,
       paymentId: 'pay-1',
       reference: 'PAY-00000007',
       orderId: ORDER_ID,
@@ -193,6 +205,7 @@ describe('NotificationsService — a transport failure', () => {
     // forever, and re-sending an email that may already have gone out.
     await expect(
       service.onUserRegistered({
+        eventId: EVENT_ID,
         userId: USER_ID,
         email: 'ada@example.test',
         firstName: 'Ada',
@@ -204,5 +217,79 @@ describe('NotificationsService — a transport failure', () => {
     expect(recorded.failureReason).toBe('ECONNREFUSED');
     // The recipient is still recorded, so you can see who did not get it.
     expect(recorded.recipient).toBe('ada@example.test');
+  });
+});
+
+describe('NotificationsService — at-least-once delivery', () => {
+  const order = {
+    eventId: EVENT_ID,
+    orderId: ORDER_ID,
+    orderNumber: 'ORD-00000042',
+    userId: USER_ID,
+    cartId: 'cart-1',
+    total: '48.24',
+    currency: 'USD',
+    lines: [
+      { productId: 'p1', sku: 'LAP-X1C', quantity: 3, unitPrice: '16.08' },
+    ],
+  };
+
+  it('sends nothing when the event has already been handled', async () => {
+    const { service, repo, mailer } = build();
+    // The INSERT into processed_events hit the primary key: somebody has
+    // this one already.
+    repo.claimEvent.mockResolvedValue(false);
+
+    await service.onOrderConfirmed(order);
+
+    // THE ASSERTION THAT MATTERS. Every other consumer in this system
+    // survives a redelivery by being naturally repeatable. There is no WHERE
+    // clause that un-sends an email, so this one has to recognise the repeat.
+    expect(mailer.send).not.toHaveBeenCalled();
+    expect(repo.record).not.toHaveBeenCalled();
+  });
+
+  it('claims the event BEFORE sending', async () => {
+    const { service, repo, mailer } = build();
+
+    await service.onOrderConfirmed(order);
+
+    // The ordering is a deliberate trade: a crash in between costs ONE
+    // MISSED EMAIL, where claiming afterwards would cost a duplicate on
+    // every crash. A missing receipt can be found in GET /notifications and
+    // resent; a customer who gets three receipts concludes the shop is
+    // broken.
+    expect(repo.claimEvent.mock.invocationCallOrder[0]).toBeLessThan(
+      mailer.send.mock.invocationCallOrder[0],
+    );
+    expect(repo.claimEvent).toHaveBeenCalledWith(EVENT_ID, 'order.confirmed');
+  });
+
+  it('releases the claim when the handler throws, so a redelivery retries', async () => {
+    const { service, repo } = build();
+    // Not a failed SEND — those are recorded, not thrown. This is the
+    // database refusing a write, or something equally unexpected.
+    repo.findContact.mockRejectedValue(new Error('connection terminated'));
+
+    await expect(service.onOrderConfirmed(order)).rejects.toThrow();
+
+    expect(repo.releaseEvent).toHaveBeenCalledWith(EVENT_ID);
+  });
+
+  it('still records the contact when the welcome is a duplicate', async () => {
+    const { service, repo, mailer } = build();
+    repo.claimEvent.mockResolvedValue(false);
+
+    await service.onUserRegistered({
+      eventId: EVENT_ID,
+      userId: USER_ID,
+      email: 'ada@example.test',
+      firstName: 'Ada',
+    });
+
+    // The upsert sits OUTSIDE the claim on purpose: it is naturally
+    // repeatable, and every later email depends on that row existing.
+    expect(repo.upsertContact).toHaveBeenCalled();
+    expect(mailer.send).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,7 @@ import {
   QueryOrdersDto,
   type OrderCancelledPayload,
   type OrderConfirmedPayload,
+  newEventId,
 } from '@ecommerce/contracts';
 import { lineTotal, sumDecimals } from '@ecommerce/money';
 import {
@@ -134,6 +135,7 @@ export class OrdersService {
      * past, addressed to nobody in particular. Nobody replies to it.
      */
     this.events.emit(EventPattern.OrderConfirmed, {
+      eventId: newEventId(),
       orderId: order.id,
       orderNumber: order.orderNumber,
       userId,
@@ -225,6 +227,7 @@ export class OrdersService {
     // order that is still confirmed can never leave — an event that is not a
     // fact is worse than no event, because consumers act on it.
     this.events.emit(EventPattern.OrderCancelled, {
+      eventId: newEventId(),
       orderId: existing.id,
       orderNumber: existing.orderNumber,
       userId,

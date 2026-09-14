@@ -6,6 +6,7 @@ import {
   InventoryDto,
   StockMovementDto,
   StockOperationDto,
+  newEventId,
 } from '@ecommerce/contracts';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -100,6 +101,7 @@ export class InventoryService {
     // so a 409 never reaches this line — a "StockReserved" event for stock
     // that was not reserved would be a lie that consumers act on.
     this.events.emit(EventPattern.StockReserved, {
+      eventId: newEventId(),
       productId,
       quantity: dto.quantity,
       available: result.available,
@@ -117,6 +119,7 @@ export class InventoryService {
     );
 
     this.events.emit(EventPattern.StockReleased, {
+      eventId: newEventId(),
       productId,
       quantity: dto.quantity,
       available: result.available,

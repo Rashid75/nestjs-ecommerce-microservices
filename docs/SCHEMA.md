@@ -1,6 +1,6 @@
 # Database Schema
 
-Every table in the system as of **Milestone 10, pass 1**, taken from the
+Every table in the system as of **Milestone 10**, taken from the
 migrations — the migrations are the source of truth, not this file.
 
 **Seven databases, one per service.** No service holds credentials for
@@ -14,7 +14,7 @@ ecommerce_inventory_db   inventory_items · stock_movements
 ecommerce_cart_db        carts · cart_items
 ecommerce_order_db       orders · order_items
 ecommerce_payment_db     payments
-ecommerce_notification_db  contacts · notifications
+ecommerce_notification_db  contacts · notifications · processed_events
 ```
 
 ---
@@ -178,6 +178,12 @@ erDiagram
         timestamptz sent_at
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    processed_events {
+        uuid event_id PK "the claim IS the primary key"
+        varchar_100 pattern "which event, for reading the table"
+        timestamptz handled_at
     }
 
     categories ||--o{ products : "has"
@@ -398,6 +404,12 @@ contacts                     A PROJECTION, built from user.registered
   created_at  timestamptz
   updated_at  timestamptz
 
+processed_events             what this consumer has already handled
+  event_id        uuid PK       claiming is an INSERT that FAILS,
+                                not a SELECT that races
+  pattern         varchar(100)
+  handled_at      timestamptz
+
 notifications                one row per email, sent or not
   id              uuid PK
   user_id         uuid          ── deliberately NO FK to contacts
@@ -432,11 +444,20 @@ evidence along with the contact. `recipient` is stored per row for the same
 reason the cart snapshots a price: the address it went to is a fact, the
 contact's current address is not.
 
-**Missing on purpose, until pass 2:** a `processed_events` table. Every other
-consumer in this system survives at-least-once delivery by being naturally
-repeatable. Sending an email cannot be — there is no WHERE clause that
-un-sends one — so this is the first place a ledger of processed event ids is
-genuinely needed.
+**`processed_events` exists here and nowhere else.** Every other consumer in
+this system survives at-least-once delivery by being naturally repeatable —
+`UPDATE carts SET status='CONVERTED' WHERE status='ACTIVE'` does nothing the
+second time. Sending an email cannot be, because there is no WHERE clause
+that un-sends one, so this consumer has to recognise the repeat instead.
+
+The primary key is the mechanism: "look it up, and if it is absent do the
+work" is check-then-act, and two replicas would both find nothing and both
+send. A failed INSERT is atomic; a SELECT is not.
+
+A ledger is not free — a row per event forever, a write on the hot path, and
+a retention sweep that does not exist yet. That is exactly why it is not in
+the Cart or Order services, where a conditional UPDATE already gives the same
+guarantee for nothing.
 
 ---
 
@@ -469,13 +490,8 @@ to enforce RESTRICT.
 
 ## Still to come
 
-Pass 2 of Milestone 10 adds one table to `ecommerce_notification_db`:
-
-```text
-processed_events   event_id uuid PRIMARY KEY, plus when it was handled
-```
-
-An INSERT that violates that primary key is the handler saying "I have
-already done this one" — which is how a consumer whose work cannot be
-repeated survives being delivered the same message twice. It needs events to
-carry an id first, so an envelope arrives with it.
+Milestone 11 is observability, which adds no tables — it adds a
+**correlation id** to every event and every request, so one customer's
+journey can be followed across eight services. Events already carry an
+`eventId`; that answers "have I seen this message?" and says nothing about
+which request caused it.

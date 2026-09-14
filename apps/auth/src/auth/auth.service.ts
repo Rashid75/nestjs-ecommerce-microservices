@@ -7,6 +7,7 @@ import {
   UserProfileDto,
   EventPattern,
   EVENTS_CLIENT,
+  newEventId,
 } from '@ecommerce/contracts';
 import {
   ConflictException,
@@ -113,6 +114,7 @@ export class AuthService {
       // Note WHAT is published: `user.registered`, a past-tense fact, not
       // `send.welcome.email`. Auth does not know an email system exists.
       this.events.emit(EventPattern.UserRegistered, {
+        eventId: newEventId(),
         userId: user.id,
         email: user.email,
         firstName: user.firstName,

@@ -1625,11 +1625,11 @@
               "host": ["{{gatewayUrl}}"],
               "path": ["{{apiPrefix}}", "orders"]
             },
-            "description": "Add something to the cart first if it is empty (folder 4). Then re-run the first request in this folder: a new ORDER_CONFIRMED appears a moment later.\n\nWatch the Cart Service log at the same time. **Both** services received this one event, each with its own copy — the cart converted itself and the notification service emailed. On the single shared queue this project used until M10, they would have taken turns."
+            "description": "Add something to the cart first if it is empty (folder 4). Then re-run the first request in this folder: a new ORDER_CONFIRMED appears a moment later.\n\nWatch the Cart Service log at the same time. **Both** services received this one event, each with its own copy — the cart converted itself and the notification service emailed. On the single shared queue this project used until M10, they would have taken turns.\n\nNote also what each did with a redelivery. The cart is safe for free (`WHERE status = 'ACTIVE'`); the notification service had to claim the event id to be safe at all."
           }
         },
         {
-          "name": "⚠ Two confirmations for one order — still open",
+          "name": "One confirmation per order, however many deliveries",
           "request": {
             "method": "GET",
             "header": [
@@ -1649,7 +1649,7 @@
                 }
               ]
             },
-            "description": "**Not a bug to report — the thing to notice.**\n\nRabbitMQ delivers at-least-once, so this handler will eventually run twice for the same message and the customer gets two confirmations. To force it: stop the Notification Service mid-handler, or requeue the message from the management UI at :15672.\n\nEvery other consumer in this system survives that by being naturally repeatable — `UPDATE carts SET status='CONVERTED' WHERE status='ACTIVE'` does nothing the second time. **There is no WHERE clause that un-sends an email.**\n\nThat is why pass 2 adds a `processed_events` ledger here and nowhere else, and why the events need to carry an id first."
+            "description": "**The thing to try.**\n\nRabbitMQ delivers at-least-once, so this handler will eventually be given the same message twice. Force it: open the management UI at :15672, find `notification_service`, and use **Get messages** with *Requeue: yes* — or stop the service mid-handler and start it again.\n\nThe count here does not change. The service claimed the `eventId` in a `processed_events` ledger before it sent anything, and the second delivery finds the claim taken. Its log says so at debug level: *already handled, skipping*.\n\nEvery other consumer in this system survives a redelivery for free, by being naturally repeatable — `UPDATE carts SET status='CONVERTED' WHERE status='ACTIVE'` does nothing the second time. **There is no WHERE clause that un-sends an email**, which is why this is the only service in the project with a ledger.\n\nClaiming BEFORE the send is a deliberate trade: a crash in between costs one missed email, where claiming afterwards would cost a duplicate on every crash."
           }
         }
       ]

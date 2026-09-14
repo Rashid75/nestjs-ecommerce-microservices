@@ -4,12 +4,13 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 10 — Notification Service (pass 1).**
+> **Current status: Milestone 10 — Notification Service.**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
 > services can react to the same event — the limitation M7 wrote down and
-> M10 had to fix.
+> M10 had to fix. Emails are deduplicated, because an email is the first
+> thing in this system that cannot simply be done twice.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -516,19 +517,38 @@ transaction as the row, and let a separate relay publish it. It is deferred
 until a lost event costs something real, and the trigger is written down in
 [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md).
 
-### Consumers must be repeatable
+### Consumers must survive being told twice
 
 RabbitMQ delivers **at-least-once**, so every handler will eventually run
-twice for the same message. The cheapest defence is an operation that is
-naturally repeatable:
+twice for the same message. There are two defences, and the cheap one is
+almost always right:
 
-```ts
-UPDATE carts SET status = 'CONVERTED' WHERE id = :cartId AND status = 'ACTIVE'
+**1. Be naturally repeatable.** A conditional UPDATE does nothing the second
+time, and the consumer never needs to know it has seen the message before:
+
+```sql
+UPDATE carts  SET status = 'CONVERTED' WHERE id = :cartId AND status = 'ACTIVE'
+UPDATE orders SET status = 'PAID'      WHERE id = :orderId AND status = 'CONFIRMED'
 ```
 
-The second delivery updates no rows and that is the correct outcome — no
-ledger of processed event ids needed. A processed-events table is for work
-that genuinely cannot be repeated: sending an email, charging a card.
+**2. Recognise the repeat.** Some work cannot be made repeatable — there is
+no WHERE clause that un-sends an email. Those consumers claim the event id in
+a ledger before acting:
+
+```ts
+// an INSERT that FAILS, not a SELECT that races
+const claimed = await repo.claimEvent(event.eventId, pattern);
+if (!claimed) return;
+```
+
+Every event payload carries an `eventId`, stamped by the publisher and the
+same on every delivery. Only the Notification Service keeps a ledger: a row
+per event forever, plus a write on the hot path, is a real cost and buying it
+where a conditional UPDATE already works is paying twice.
+
+Claiming **before** the work is a deliberate trade — a crash in between costs
+one missed email, where claiming afterwards would cost a duplicate on every
+crash.
 
 ### The world when the message arrives, not when it was sent
 

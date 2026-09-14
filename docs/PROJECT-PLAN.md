@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 9 of 15, plus pass 1 of milestone 10                                  |
+| **Milestones complete** | 10 of 15                                                              |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                                    |
 | **Databases**           | one per service, seven in total                                       |
-| **Next**                | **M10 pass 2** — deduplicating at-least-once delivery                 |
+| **Next milestone**      | 11 — Observability                                                    |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ▓░ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░  ← M10 pass 1 of 2
+M9 ██ M10 ██ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
 ---
@@ -530,13 +530,13 @@ Order Service ── order.confirmed ──► ecommerce_events ──► Cart S
 ### Deliberately NOT built
 
 | Not built                           | Comes back when                                                                                                                                                                                                                              |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails — a compensating workflow. Do it when overselling matters more than the complexity does. |
-| **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails.                                                                                         | when it bites   |
-| **Saga + compensation**             | With stock reservation, or with the Payment Service — whichever forces it first.                                                                                                                                                             | M9 candidate    |
-| **Transactional outbox**            | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                                                                                                                  | M10             |
+| **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails.                                                                                         | when it bites |
+| **Saga + compensation**             | With stock reservation, or with the Payment Service — whichever forces it first.                                                                                                                                                             | M9 candidate  |
+| **Transactional outbox**            | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                                                                                                                  | M10           |
 | **`Idempotency-Key` on checkout**   | When a double-clicked checkout is observed creating two orders. The window is already small: the second click usually finds an empty cart.                                                                                                   |
-| **Event envelope**                  | With the outbox — an `eventId` is what deduplication needs. Correlation ids follow in M11.                                                                                                                                                   | with the outbox |
+| **Correlation ids**                 | M11 — events carry an `eventId` now; tracing a request across services needs a second, different id.                                                                                                                                         | M11           |
 | **Order events consumed elsewhere** | The Notification Service, M10 — and that is also when one queue stops being enough and a topic exchange is needed.                                                                                                                           |
 
 ### Verified
@@ -627,11 +627,10 @@ move to PAID waits for the broker.
 
 ---
 
-## 🟡 Milestone 10 — Notification Service
+## ✅ Milestone 10 — Notification Service
 
-**Pass 1 complete.** The service, the templates, and the topic exchange it
-forced. Pass 2 is deduplication, which is the reason this milestone is where
-a processed-events ledger finally earns its place.
+**Status: complete.** Pass 1 built the service, the templates and the topic
+exchange it forced; pass 2 made it survive being told the same thing twice.
 
 ### The architectural change this milestone forced
 
@@ -708,7 +707,7 @@ and its costs are written down rather than discovered.
 
 ### Verified
 
-118 unit tests across eleven projects; all eight services build and lint.
+122 unit tests across eleven projects; all eight services build and lint.
 
 > ⚠️ **The exchange needs one runtime check.** Every publisher and consumer was
 > reconfigured, and the bindings are only created when the services connect to
@@ -721,7 +720,7 @@ and its costs are written down rather than discovered.
 
 ## ⬜ Milestone 11 — Observability
 
-**Next milestone.** Pino structured logging, correlation IDs, OpenTelemetry traces and metrics,
+**Next up.** Pino structured logging, correlation IDs, OpenTelemetry traces and metrics,
 SigNoz. The goal: understand where a request spent its time across services.
 
 ---
@@ -794,8 +793,8 @@ exists so that "not yet" never quietly becomes "never".
 | **Transactional outbox**           | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                          | M10             |
 | **Idempotency-Key on checkout**    | A double-clicked checkout is seen creating two orders. The window is small — the second click usually finds an empty cart.                           | when observed   |
 | **Idempotent inventory commands**  | A retried `reserve` double-reserves. Key the command on its `reference`.                                                                             | M9/M12          |
-| **Processed-events ledger**        | Delivered twice, an email is sent twice — and no WHERE clause un-sends one. The first consumer that is not naturally repeatable.                     | **M10 pass 2**  |
-| **Retry of a failed email**        | A send that fails is recorded and left. Nothing tries again.                                                                                         | **M10 pass 2**  |
+| **Ledger retention**               | Disk pressure. `processed_events` keeps one row per event forever.                                                                                   | when measured   |
+| **Retry of a failed email**        | A send that fails is recorded and left. Nothing tries again — and the claim stays taken, so redelivery will not either.                              | when it matters |
 | **Notification preferences**       | Anything beyond strictly transactional email needs opt-outs before it is sent.                                                                       | before launch   |
 | **Event envelope**                 | With the outbox — an `eventId` is what deduplication needs. Correlation ids follow in M11.                                                           | with the outbox |
 | **Payment reconciliation**         | A payment stuck PENDING blocks its order and nobody is told. Ask the provider what happened to it.                                                   | when one sticks |
