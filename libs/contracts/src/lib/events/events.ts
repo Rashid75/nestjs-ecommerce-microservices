@@ -133,6 +133,27 @@ export interface EventMeta {
    * thing it must not do.
    */
   eventId: string;
+
+  /**
+   * Which customer action this event belongs to.
+   *
+   * A DIFFERENT ID FROM `eventId`, and the difference is the point:
+   *
+   *   eventId        identifies THIS MESSAGE. "Have I handled this one?"
+   *                  Unique per event; two events from the same checkout
+   *                  have different ones.
+   *   correlationId  identifies THE WHOLE STORY. "What else happened
+   *                  because of this?" Minted once at the gateway when the
+   *                  customer clicked, and carried by every request and
+   *                  every event that follows from it — so the same value
+   *                  appears in eight services' logs.
+   *
+   * Conflating them is the common mistake, and it costs you exactly the
+   * question you built the ids to answer: dedupe on a correlation id and you
+   * drop the second event of a checkout; join logs by an event id and each
+   * line is its own island.
+   */
+  correlationId: string;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { ObservabilityModule } from '@ecommerce/observability';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { paymentEnvSchema } from '../config/env.validation';
@@ -12,6 +13,14 @@ import { PaymentsModule } from '../payments/payments.module';
       validationSchema: paymentEnvSchema,
       validationOptions: { abortEarly: false, allowUnknown: true },
       cache: true,
+    }),
+
+    // Registered right after the config, and before anything that logs:
+    // every other module in this app resolves the logger from here.
+    ObservabilityModule.forRoot({
+      service: 'payment',
+      level: process.env.LOG_LEVEL ?? 'info',
+      pretty: process.env.LOG_PRETTY === 'true',
     }),
     DatabaseModule,
 

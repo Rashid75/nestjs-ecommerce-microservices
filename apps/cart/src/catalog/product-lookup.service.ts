@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { ProductDto, ProductStatus } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import {
@@ -65,7 +66,9 @@ export class ProductLookupService {
 
     try {
       const response = await firstValueFrom(
-        this.http.get<ProductDto>(`/products/${productId}`),
+        this.http.get<ProductDto>(`/products/${productId}`, {
+          headers: correlationHeaders(),
+        }),
       );
       product = response.data;
     } catch (error) {

@@ -1,3 +1,4 @@
+import { runWithCorrelationId } from '@ecommerce/observability';
 import {
   EventPattern as Events,
   ProductArchivedPayload,
@@ -57,16 +58,22 @@ export class CatalogueEventsController {
   async onPriceChanged(
     @Payload() payload: ProductPriceChangedPayload,
   ): Promise<void> {
-    const [affected] = await this.items.update(
-      { cataloguePrice: payload.newPrice },
-      { where: { productId: payload.productId } },
-    );
-
-    if (affected > 0) {
-      this.logger.log(
-        `${payload.sku}: ${payload.previousPrice} → ${payload.newPrice}, flagged ${affected} cart line(s)`,
+    // THE ID CROSSES THE BROKER IN THE PAYLOAD, and is put back into the
+    // async context here. Nothing carries it automatically: this handler
+    // runs in a different process, minutes later if the broker was down, and
+    // without this line its logs would belong to no story at all.
+    await runWithCorrelationId(payload.correlationId, async () => {
+      const [affected] = await this.items.update(
+        { cataloguePrice: payload.newPrice },
+        { where: { productId: payload.productId } },
       );
-    }
+
+      if (affected > 0) {
+        this.logger.log(
+          `${payload.sku}: ${payload.previousPrice} → ${payload.newPrice}, flagged ${affected} cart line(s)`,
+        );
+      }
+    });
   }
 
   /**
@@ -77,15 +84,17 @@ export class CatalogueEventsController {
    */
   @EventPattern(Events.ProductArchived)
   async onArchived(@Payload() payload: ProductArchivedPayload): Promise<void> {
-    const [affected] = await this.items.update(
-      { unavailableAt: new Date() },
-      { where: { productId: payload.productId } },
-    );
-
-    if (affected > 0) {
-      this.logger.log(
-        `${payload.sku}: archived, flagged ${affected} cart line(s) unavailable`,
+    await runWithCorrelationId(payload.correlationId, async () => {
+      const [affected] = await this.items.update(
+        { unavailableAt: new Date() },
+        { where: { productId: payload.productId } },
       );
-    }
+
+      if (affected > 0) {
+        this.logger.log(
+          `${payload.sku}: archived, flagged ${affected} cart line(s) unavailable`,
+        );
+      }
+    });
   }
 }

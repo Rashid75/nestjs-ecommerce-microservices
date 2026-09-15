@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { CartDto } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
@@ -22,7 +23,7 @@ export class CartProxyService extends UpstreamProxy {
   }
 
   private headers(userId: string): Record<string, string> {
-    return { 'x-user-id': userId };
+    return { 'x-user-id': userId, ...correlationHeaders() };
   }
 
   getCart(userId: string): Promise<CartDto> {

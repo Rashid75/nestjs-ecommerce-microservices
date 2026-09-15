@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { InventoryDto, StockMovementDto } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
@@ -17,6 +18,7 @@ export class InventoryProxyService extends UpstreamProxy {
 
   get(productId: string): Promise<InventoryDto> {
     return this.forward<InventoryDto>({
+      headers: correlationHeaders(),
       method: 'GET',
       url: `/inventory/${productId}`,
     });
@@ -24,6 +26,7 @@ export class InventoryProxyService extends UpstreamProxy {
 
   movements(productId: string): Promise<StockMovementDto[]> {
     return this.forward<StockMovementDto[]>({
+      headers: correlationHeaders(),
       method: 'GET',
       url: `/inventory/${productId}/movements`,
     });
@@ -31,6 +34,7 @@ export class InventoryProxyService extends UpstreamProxy {
 
   create(body: unknown): Promise<InventoryDto> {
     return this.forward<InventoryDto>({
+      headers: correlationHeaders(),
       method: 'POST',
       url: '/inventory',
       data: body,
@@ -44,6 +48,7 @@ export class InventoryProxyService extends UpstreamProxy {
     body: unknown,
   ): Promise<InventoryDto> {
     return this.forward<InventoryDto>({
+      headers: correlationHeaders(),
       method: 'POST',
       url: `/inventory/${productId}/${action}`,
       data: body,

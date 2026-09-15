@@ -853,6 +853,18 @@
           "name": "POST /orders — place the order",
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A correlation id chosen by the CLIENT. The gateway would mint one",
+                  "// if this header were absent; supplying it is what lets a front end",
+                  "// quote an id in a bug report.",
+                  "pm.environment.set('correlationId', 'cid-' + Date.now());"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -874,6 +886,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "X-Correlation-Id",
+                "value": "{{correlationId}}"
               }
             ],
             "body": {
@@ -890,7 +906,25 @@
               "host": ["{{gatewayUrl}}"],
               "path": ["{{apiPrefix}}", "orders"]
             },
-            "description": "An EMPTY body. The lines come from the cart and the owner from the verified token — a client that could name its own prices would order a laptop for a penny."
+            "description": "An **empty body**. The lines come from the cart and the owner from the verified token — a client that could name its own prices would order a laptop for a penny.\n\n**Watch the correlation id.** This request sends `X-Correlation-Id`, and the same value comes back on the response. Now search the running services for it:\n\n```bash\nnpm start | grep cid-\n```\n\nThe gateway, the order service, the cart service and the notification service all logged under that one id — across three HTTP hops and one RabbitMQ event. Remove the header and the gateway mints one instead; the chain is identical, you just have to read it off the response."
+          }
+        },
+        {
+          "name": "The correlation id comes back on the response",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["{{apiPrefix}}", "orders", "{{orderId}}"]
+            },
+            "description": "Send this **without** an `X-Correlation-Id` header and look at the response headers: the gateway minted one and echoed it back.\n\nThat is the point of echoing it. A customer whose request failed is holding the one thing you need to investigate it, and they can read it off a support page without knowing what it is.\n\nEvery log line from this request — in the gateway and in the order service — carries that value."
           }
         },
         {

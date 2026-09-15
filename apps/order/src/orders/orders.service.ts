@@ -12,6 +12,7 @@ import {
   type OrderConfirmedPayload,
   newEventId,
 } from '@ecommerce/contracts';
+import { correlationIdForEvent } from '@ecommerce/observability';
 import { lineTotal, sumDecimals } from '@ecommerce/money';
 import {
   BadRequestException,
@@ -136,6 +137,7 @@ export class OrdersService {
      */
     this.events.emit(EventPattern.OrderConfirmed, {
       eventId: newEventId(),
+      correlationId: correlationIdForEvent(),
       orderId: order.id,
       orderNumber: order.orderNumber,
       userId,
@@ -228,6 +230,7 @@ export class OrdersService {
     // fact is worse than no event, because consumers act on it.
     this.events.emit(EventPattern.OrderCancelled, {
       eventId: newEventId(),
+      correlationId: correlationIdForEvent(),
       orderId: existing.id,
       orderNumber: existing.orderNumber,
       userId,

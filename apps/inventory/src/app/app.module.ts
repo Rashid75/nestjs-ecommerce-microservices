@@ -1,3 +1,4 @@
+import { ObservabilityModule } from '@ecommerce/observability';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { inventoryEnvSchema } from '../config/env.validation';
@@ -19,6 +20,14 @@ import { InventoryModule } from '../inventory/inventory.module';
       validationSchema: inventoryEnvSchema,
       validationOptions: { abortEarly: false, allowUnknown: true },
       cache: true,
+    }),
+
+    // Registered right after the config, and before anything that logs:
+    // every other module in this app resolves the logger from here.
+    ObservabilityModule.forRoot({
+      service: 'inventory',
+      level: process.env.LOG_LEVEL ?? 'info',
+      pretty: process.env.LOG_PRETTY === 'true',
     }),
     DatabaseModule,
 

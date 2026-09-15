@@ -12,6 +12,7 @@ import {
   type PaymentSucceededPayload,
   newEventId,
 } from '@ecommerce/contracts';
+import { correlationIdForEvent } from '@ecommerce/observability';
 import {
   ConflictException,
   HttpException,
@@ -165,6 +166,7 @@ export class PaymentsService {
 
       this.events.emit(EventPattern.PaymentSucceeded, {
         eventId: newEventId(),
+        correlationId: correlationIdForEvent(),
         paymentId: settled.id,
         reference: settled.reference,
         orderId: settled.orderId,
@@ -387,6 +389,7 @@ export class PaymentsService {
   private emitFailure(payment: PaymentRecord, userId: string): void {
     this.events.emit(EventPattern.PaymentFailed, {
       eventId: newEventId(),
+      correlationId: correlationIdForEvent(),
       paymentId: payment.id,
       reference: payment.reference,
       orderId: payment.orderId,

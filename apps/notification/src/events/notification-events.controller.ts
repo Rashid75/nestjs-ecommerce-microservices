@@ -1,3 +1,4 @@
+import { runWithCorrelationId } from '@ecommerce/observability';
 import {
   EventPattern as Events,
   type OrderConfirmedPayload,
@@ -45,14 +46,19 @@ export class NotificationEventsController {
   async onUserRegistered(
     @Payload() user: UserRegisteredPayload,
   ): Promise<void> {
-    await this.notifications.onUserRegistered(user);
+    // Back into the customer's story, on the other side of the broker.
+    await runWithCorrelationId(user.correlationId, () =>
+      this.notifications.onUserRegistered(user),
+    );
   }
 
   @EventPattern(Events.OrderConfirmed)
   async onOrderConfirmed(
     @Payload() order: OrderConfirmedPayload,
   ): Promise<void> {
-    await this.notifications.onOrderConfirmed(order);
+    await runWithCorrelationId(order.correlationId, () =>
+      this.notifications.onOrderConfirmed(order),
+    );
   }
 
   /**
@@ -68,6 +74,8 @@ export class NotificationEventsController {
   async onPaymentSucceeded(
     @Payload() payment: PaymentSucceededPayload,
   ): Promise<void> {
-    await this.notifications.onPaymentSucceeded(payment);
+    await runWithCorrelationId(payment.correlationId, () =>
+      this.notifications.onPaymentSucceeded(payment),
+    );
   }
 }

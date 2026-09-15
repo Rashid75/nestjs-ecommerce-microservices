@@ -8,6 +8,7 @@ import {
   StockOperationDto,
   newEventId,
 } from '@ecommerce/contracts';
+import { correlationIdForEvent } from '@ecommerce/observability';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ConflictException,
@@ -102,6 +103,7 @@ export class InventoryService {
     // that was not reserved would be a lie that consumers act on.
     this.events.emit(EventPattern.StockReserved, {
       eventId: newEventId(),
+      correlationId: correlationIdForEvent(),
       productId,
       quantity: dto.quantity,
       available: result.available,
@@ -120,6 +122,7 @@ export class InventoryService {
 
     this.events.emit(EventPattern.StockReleased, {
       eventId: newEventId(),
+      correlationId: correlationIdForEvent(),
       productId,
       quantity: dto.quantity,
       available: result.available,

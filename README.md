@@ -4,13 +4,15 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 10 — Notification Service.**
+> **Current status: Milestone 11 — Observability (pass 1).**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
 > services can react to the same event — the limitation M7 wrote down and
 > M10 had to fix. Emails are deduplicated, because an email is the first
-> thing in this system that cannot simply be done twice.
+> thing in this system that cannot simply be done twice. Every line of every
+> log is JSON carrying a **correlation id**, so one customer's journey across
+> eight services is a single `grep`.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -246,6 +248,11 @@ ecommerce/
 │   │       └── common/               pagination envelope
 │   ├── money/                        @ecommerce/money · type:lib
 │   │   └── src/lib/money.ts          exact decimals in integer minor units
+│   ├── observability/                @ecommerce/observability · type:lib
+│   │   └── src/lib/
+│   │       ├── correlation.ts        AsyncLocalStorage, and why not a variable
+│   │       ├── correlation.middleware.ts  adopt or mint, per request
+│   │       └── pino-logger.service.ts     Pino behind Nest's LoggerService
 │   └── redis/                        @ecommerce/redis · type:lib
 │       └── src/lib/
 │           ├── redis.module.ts       lazily-connected client, key prefix
@@ -731,6 +738,29 @@ docker run -d --name ecommerce-mailhog -p 1025:1025 -p 8025:8025 mailhog/mailhog
 ```
 
 Then set `MAIL_TRANSPORT=smtp` and read the mail at http://localhost:8025.
+
+### Following one request across eight services
+
+Every request and every event carries a **correlation id**. It is minted at
+the gateway (or adopted from an `X-Correlation-Id` header you supply), comes
+back on the response, and travels on to every hop — HTTP headers between
+services, a `correlationId` field on every event payload.
+
+```bash
+npm start | grep 9f2c1a7e
+```
+
+```text
+[gateway]      POST /api/orders 201 84ms
+[order]        order ORD-00000042: 2 line(s), 48.24 USD
+[cart]         cart 3f9…: marked CONVERTED
+[notification] ORDER_CONFIRMED → ada@example.test
+```
+
+Logs are JSON by default; set `LOG_PRETTY=true` for the colourised form
+above, and `LOG_LEVEL` to turn the volume up during an incident without a
+deploy. Authorization headers, passwords, tokens and anything card-shaped are
+redacted on every line.
 
 ### Listing query parameters
 

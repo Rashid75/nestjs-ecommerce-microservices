@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { CartDto } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import {
@@ -45,7 +46,7 @@ export class CartClientService {
     try {
       const response = await firstValueFrom(
         this.http.get<CartDto>('/cart', {
-          headers: { 'x-user-id': userId },
+          headers: { 'x-user-id': userId, ...correlationHeaders() },
         }),
       );
       return response.data;

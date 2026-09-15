@@ -1,3 +1,4 @@
+import { runWithCorrelationId } from '@ecommerce/observability';
 import {
   EventPattern as Events,
   type PaymentFailedPayload,
@@ -31,6 +32,12 @@ export class PaymentEventsController {
   async onPaymentSucceeded(
     @Payload() payment: PaymentSucceededPayload,
   ): Promise<void> {
+    await runWithCorrelationId(payment.correlationId, () =>
+      this.markPaid(payment),
+    );
+  }
+
+  private async markPaid(payment: PaymentSucceededPayload): Promise<void> {
     const paid = await this.orders.markPaid(payment.orderId);
 
     if (paid) {
@@ -82,9 +89,14 @@ export class PaymentEventsController {
    * log without changing its state.
    */
   @EventPattern(Events.PaymentFailed)
-  onPaymentFailed(@Payload() payment: PaymentFailedPayload): void {
-    this.logger.warn(
-      `payment ${payment.reference}: ${payment.failureCode} on order ${payment.orderId} (retryable: ${payment.retryable}) — the order stays payable`,
-    );
+  async onPaymentFailed(
+    @Payload() payment: PaymentFailedPayload,
+  ): Promise<void> {
+    await runWithCorrelationId(payment.correlationId, () => {
+      this.logger.warn(
+        `payment ${payment.reference}: ${payment.failureCode} on order ${payment.orderId} (retryable: ${payment.retryable}) — the order stays payable`,
+      );
+      return Promise.resolve();
+    });
   }
 }

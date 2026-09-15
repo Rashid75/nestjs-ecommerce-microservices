@@ -9,6 +9,7 @@ import {
   EVENTS_CLIENT,
   newEventId,
 } from '@ecommerce/contracts';
+import { correlationIdForEvent } from '@ecommerce/observability';
 import {
   ConflictException,
   Injectable,
@@ -115,6 +116,7 @@ export class AuthService {
       // `send.welcome.email`. Auth does not know an email system exists.
       this.events.emit(EventPattern.UserRegistered, {
         eventId: newEventId(),
+        correlationId: correlationIdForEvent(),
         userId: user.id,
         email: user.email,
         firstName: user.firstName,

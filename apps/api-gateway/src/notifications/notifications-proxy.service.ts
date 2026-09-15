@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { NotificationDto, PageMetaDto } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
@@ -23,7 +24,7 @@ export class NotificationsProxyService extends UpstreamProxy {
       method: 'GET',
       url: '/notifications',
       params: query,
-      headers: { 'x-user-id': userId },
+      headers: { 'x-user-id': userId, ...correlationHeaders() },
     });
   }
 }

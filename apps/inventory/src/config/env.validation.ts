@@ -21,6 +21,8 @@ import * as Joi from 'joi';
  */
 export interface InventoryEnv {
   NODE_ENV: 'development' | 'test' | 'production';
+  LOG_LEVEL: string;
+  LOG_PRETTY: boolean;
   INVENTORY_SERVICE_PORT: number;
 
   INVENTORY_DB_HOST: string;
@@ -38,6 +40,20 @@ export const inventoryEnvSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'test', 'production')
     .default('development'),
+
+  // How much to say. `debug` in development; `info` in production, where a
+  // debug line per request costs real money in log storage and buries the
+  // lines that matter. Configuration rather than a constant, so turning it
+  // up during an incident is an environment change, not a deploy.
+  LOG_LEVEL: Joi.string()
+    .valid('trace', 'debug', 'info', 'warn', 'error', 'fatal')
+    .default('info'),
+
+  // Colourised, human-readable output instead of JSON. ON locally because
+  // reading JSON by eye is miserable; OFF everywhere else, because a log
+  // shipper needs the JSON and pino-pretty costs a whole extra process to
+  // produce something no machine can parse.
+  LOG_PRETTY: Joi.boolean().default(false),
 
   INVENTORY_SERVICE_PORT: Joi.number().port().default(3003),
 

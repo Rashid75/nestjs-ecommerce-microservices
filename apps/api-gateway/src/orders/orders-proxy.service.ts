@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { OrderDto, PageMetaDto } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
@@ -23,7 +24,7 @@ export class OrdersProxyService extends UpstreamProxy {
   }
 
   private headers(userId: string): Record<string, string> {
-    return { 'x-user-id': userId };
+    return { 'x-user-id': userId, ...correlationHeaders() };
   }
 
   create(userId: string, body: unknown): Promise<OrderDto> {

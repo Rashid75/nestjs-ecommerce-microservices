@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 10 of 15                                                              |
+| **Milestones complete** | 10 of 15, plus pass 1 of milestone 11                                 |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                                    |
 | **Databases**           | one per service, seven in total                                       |
-| **Next milestone**      | 11 — Observability                                                    |
+| **Next**                | **M11 pass 2** — OpenTelemetry, metrics, SigNoz                       |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ██ M11 ░░ M12 ░░ M13 ░░ M14 ░░ M15 ░░
+M9 ██ M10 ██ M11 ▓░ M12 ░░ M13 ░░ M14 ░░ M15 ░░  ← M11 pass 1 of 2
 ```
 
 ---
@@ -91,6 +91,10 @@ RabbitMQ :5672   topic exchange ecommerce.events, one queue per consumer
                                  · payment.succeeded
    order.confirmed goes to TWO of them, each getting its own copy — which is
    the whole reason M10 replaced the single shared queue with an exchange.
+
+Every request and every event carries a CORRELATION ID, minted at the
+gateway. `grep <id>` across all eight services returns one customer's
+journey, in order.
 
 Redis :6379   ecom:gateway:*  rate-limit counters + token introspection
               ecom:product:*  cache-aside entries (optional, fails open)
@@ -530,13 +534,14 @@ Order Service ── order.confirmed ──► ecommerce_events ──► Cart S
 ### Deliberately NOT built
 
 | Not built                           | Comes back when                                                                                                                                                                                                                              |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails — a compensating workflow. Do it when overselling matters more than the complexity does. |
-| **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails.                                                                                         | when it bites |
-| **Saga + compensation**             | With stock reservation, or with the Payment Service — whichever forces it first.                                                                                                                                                             | M9 candidate  |
-| **Transactional outbox**            | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                                                                                                                  | M10           |
+| **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails.                                                                                         | when it bites  |
+| **Saga + compensation**             | With stock reservation, or with the Payment Service — whichever forces it first.                                                                                                                                                             | M9 candidate   |
+| **Transactional outbox**            | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                                                                                                                  | M10            |
 | **`Idempotency-Key` on checkout**   | When a double-clicked checkout is observed creating two orders. The window is already small: the second click usually finds an empty cart.                                                                                                   |
-| **Correlation ids**                 | M11 — events carry an `eventId` now; tracing a request across services needs a second, different id.                                                                                                                                         | M11           |
+| **OpenTelemetry + SigNoz**          | M11 pass 2. Logs say what happened; a trace says where the time went, and a metric says how often.                                                                                                                                           | **M11 pass 2** |
+| **Log shipping**                    | Logs are JSON on stdout, which is right — but nothing collects them. Needed the moment there is more than one machine.                                                                                                                       | M14            |
 | **Order events consumed elsewhere** | The Notification Service, M10 — and that is also when one queue stops being enough and a topic exchange is needed.                                                                                                                           |
 
 ### Verified
@@ -718,16 +723,96 @@ and its costs are written down rather than discovered.
 
 ---
 
-## ⬜ Milestone 11 — Observability
+## 🟡 Milestone 11 — Observability
 
-**Next up.** Pino structured logging, correlation IDs, OpenTelemetry traces and metrics,
-SigNoz. The goal: understand where a request spent its time across services.
+**Pass 1 complete.** Structured logs and correlation ids — the half that
+needs no infrastructure at all. Pass 2 is OpenTelemetry and SigNoz, which
+need containers.
+
+### The question this answers
+
+> "A customer says their order failed at 14:32. What happened?"
+
+Eight processes, each writing its own lines. Before this milestone that
+question took eight terminals and a lot of guessing. Now:
+
+```text
+grep 9f2c1a7e  ⇒  gateway       POST /api/orders 201 84ms
+                  order         order ORD-00000042: 2 line(s), 48.24 USD
+                  cart          cart 3f9…: marked CONVERTED
+                  notification  ORDER_CONFIRMED → ada@example.test
+                  payment       PAY-00000007: 48.24 USD approved
+                  order         payment PAY-00000007: order → PAID
+```
+
+One id, minted once, carried across six HTTP hops and four RabbitMQ events.
+
+### Delivered
+
+**`libs/observability`** — the third shared library, and the clearest case
+yet: the log format, the redaction list and the header spelling must be
+identical in all eight services, or the stream cannot be searched as one and
+the trail breaks at the first hop that disagrees.
+
+- **Pino** behind Nest's `LoggerService`, so Nest's own logs come out in the
+  same format. JSON in production; `pino-pretty` when `LOG_PRETTY=true`
+- Every line carries `service`, `level`, `correlationId` and an ISO
+  timestamp — the correlation id supplied by a `mixin`, so no call site
+  passes it
+- **Redaction** of `authorization`, cookies, `password`, `passwordHash`,
+  `accessToken`, `paymentMethodToken`, `cardNumber`, `cvv`
+- One log line per HTTP request, on `finish`, with method, path, status and
+  duration — at `warn` for 4xx and `error` for 5xx, because alerting on a
+  rate that includes mistyped emails gets muted
+- `LOG_LEVEL` and `LOG_PRETTY` in every service's env contract
+
+**Correlation ids**, propagated by hand at every boundary:
+
+| Hop                 | How it travels                                                    |
+| ------------------- | ----------------------------------------------------------------- |
+| client → gateway    | `X-Correlation-Id` if supplied, otherwise **minted here**         |
+| gateway → service   | the same header, on every proxy call                              |
+| service → service   | the same header (cart→product, order→cart, payment→order)         |
+| service → RabbitMQ  | `correlationId` on the event payload                              |
+| RabbitMQ → consumer | the handler re-enters the scope from the payload                  |
+| gateway → client    | echoed on the response, so a failed request comes with its own id |
+
+`AsyncLocalStorage` holds it. A module-level variable would be overwritten by
+the next concurrent request the moment the first one awaited anything — a
+silent, intermittent bug that files one customer's actions under another.
+
+### Key decisions
+
+| Decision                                               | Why                                                                                                                                                                                                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`eventId` and `correlationId` are different fields** | One identifies _this message_ ("have I handled it?"); the other identifies _the whole story_ ("what else happened because of this?"). Dedupe on a correlation id and you drop the second event of a checkout.                               |
+| **Propagation is explicit at every hop**               | There is no magic that carries a header across a network. Spreading `...correlationHeaders()` into an existing headers object keeps an omission visible in review — and an omission is invisible at runtime until you need that exact path. |
+| **Middleware, not an interceptor**                     | `AsyncLocalStorage.run()` must _wrap_ the work. An interceptor returns an Observable that Nest subscribes to afterwards, outside the scope; it mostly appears to work.                                                                      |
+| **Scope re-entered in the controller, explicitly**     | Same reason, on the message side. Seven visible lines beat a global interceptor that silently loses context.                                                                                                                                |
+| **Redaction is a blunt list, applied to every line**   | It has to cover the lines a future colleague adds without thinking about it.                                                                                                                                                                |
+| **`app.useLogger()`**                                  | A system where half the lines are JSON and half are Nest's default format cannot be shipped anywhere.                                                                                                                                       |
+| **A client may supply the id**                         | A front end that mints one per user action can quote it in a bug report. It is an opaque label with no authority and is never used to look anything up.                                                                                     |
+
+### Deliberately NOT built — pass 2
+
+| Not built                | What it adds                                                                                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenTelemetry traces** | Logs tell you _what happened_; a trace tells you _where the time went_ — a waterfall showing that checkout spent 40ms in the cart read and 900ms waiting for the provider. |
+| **Metrics**              | Request rate, error rate, latency percentiles. A p99 is not visible in any number of log lines.                                                                            |
+| **SigNoz**               | Somewhere to send both, and the reason this is pass 2: it is a Docker Compose stack, not a library.                                                                        |
+| **Log shipping**         | The logs are JSON on stdout, which is exactly right — but nothing collects them yet.                                                                                       |
+
+### Verified
+
+129 unit tests across twelve projects; all eight services build and lint. The
+correlation scope has its own tests, including the concurrency case, because
+the failure it prevents is invisible in a log that looks perfectly fine.
 
 ---
 
 ## ⬜ Milestone 12 — Production Hardening
 
-Health checks (Terminus), graceful shutdown, retry policies, DLQ
+**Next milestone.** Health checks (Terminus), graceful shutdown, retry policies, DLQ
 improvements, rate limiting, Helmet, CORS, a global exception filter with the
 project's standard error envelope.
 

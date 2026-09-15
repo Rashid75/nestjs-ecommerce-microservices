@@ -10,6 +10,7 @@ import {
   UpdateProductDto,
   newEventId,
 } from '@ecommerce/contracts';
+import { correlationIdForEvent } from '@ecommerce/observability';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   BadRequestException,
@@ -243,6 +244,7 @@ export class ProductsService {
     if (before.price !== after.price) {
       this.events.emit(EventPattern.ProductPriceChanged, {
         eventId: newEventId(),
+        correlationId: correlationIdForEvent(),
         productId: after.id,
         sku: after.sku,
         previousPrice: before.price,
@@ -257,6 +259,7 @@ export class ProductsService {
     ) {
       this.events.emit(EventPattern.ProductArchived, {
         eventId: newEventId(),
+        correlationId: correlationIdForEvent(),
         productId: after.id,
         sku: after.sku,
       });

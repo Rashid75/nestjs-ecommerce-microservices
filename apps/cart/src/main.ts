@@ -1,4 +1,8 @@
 import { ServiceQueue } from '@ecommerce/contracts';
+import {
+  correlationMiddleware,
+  PinoLoggerService,
+} from '@ecommerce/observability';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -9,6 +13,21 @@ import type { CartEnv } from './config/env.validation';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get<ConfigService<CartEnv, true>>(ConfigService);
+
+  /**
+   * Nest's OWN logs go through Pino too — route mapping, shutdown, an
+   * unhandled exception. A system where half the lines are JSON and half are
+   * not cannot be shipped anywhere useful.
+   */
+  const logger = app.get(PinoLoggerService);
+  app.useLogger(logger);
+
+  /**
+   * Before every route: adopt the inbound correlation id (or mint one), put
+   * it in the async context for the rest of the request, and log how the
+   * request went.
+   */
+  app.use(correlationMiddleware(logger));
 
   app.useGlobalPipes(
     new ValidationPipe({

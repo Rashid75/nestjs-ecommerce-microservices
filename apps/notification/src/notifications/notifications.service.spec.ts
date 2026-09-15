@@ -22,6 +22,9 @@ import { NotificationsService } from './notifications.service';
  */
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const EVENT_ID = '55555555-5555-4555-8555-555555555555';
+// A DIFFERENT id from the event id, on purpose: this one is the customer's
+// whole journey, and every event of one checkout shares it.
+const CORRELATION_ID = '66666666-6666-4666-8666-666666666666';
 const ORDER_ID = '33333333-3333-4333-8333-333333333333';
 
 function build() {
@@ -58,6 +61,7 @@ describe('NotificationsService.onUserRegistered', () => {
 
     await service.onUserRegistered({
       eventId: EVENT_ID,
+      correlationId: CORRELATION_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: 'Ada',
@@ -80,6 +84,7 @@ describe('NotificationsService.onUserRegistered', () => {
 
     await service.onUserRegistered({
       eventId: EVENT_ID,
+      correlationId: CORRELATION_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: 'Ada',
@@ -98,6 +103,7 @@ describe('NotificationsService.onUserRegistered', () => {
 
     await service.onUserRegistered({
       eventId: EVENT_ID,
+      correlationId: CORRELATION_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: '   ',
@@ -111,6 +117,7 @@ describe('NotificationsService.onUserRegistered', () => {
 describe('NotificationsService.onOrderConfirmed', () => {
   const order = {
     eventId: EVENT_ID,
+    correlationId: CORRELATION_ID,
     orderId: ORDER_ID,
     orderNumber: 'ORD-00000042',
     userId: USER_ID,
@@ -178,6 +185,7 @@ describe('NotificationsService.onPaymentSucceeded', () => {
 
     await service.onPaymentSucceeded({
       eventId: EVENT_ID,
+      correlationId: CORRELATION_ID,
       paymentId: 'pay-1',
       reference: 'PAY-00000007',
       orderId: ORDER_ID,
@@ -206,6 +214,7 @@ describe('NotificationsService — a transport failure', () => {
     await expect(
       service.onUserRegistered({
         eventId: EVENT_ID,
+        correlationId: CORRELATION_ID,
         userId: USER_ID,
         email: 'ada@example.test',
         firstName: 'Ada',
@@ -223,6 +232,7 @@ describe('NotificationsService — a transport failure', () => {
 describe('NotificationsService — at-least-once delivery', () => {
   const order = {
     eventId: EVENT_ID,
+    correlationId: CORRELATION_ID,
     orderId: ORDER_ID,
     orderNumber: 'ORD-00000042',
     userId: USER_ID,
@@ -282,6 +292,7 @@ describe('NotificationsService — at-least-once delivery', () => {
 
     await service.onUserRegistered({
       eventId: EVENT_ID,
+      correlationId: CORRELATION_ID,
       userId: USER_ID,
       email: 'ada@example.test',
       firstName: 'Ada',

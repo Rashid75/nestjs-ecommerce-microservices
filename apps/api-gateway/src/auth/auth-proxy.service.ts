@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import { AuthResponseDto, UserProfileDto } from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
@@ -55,7 +56,10 @@ export class AuthProxyService extends UpstreamProxy {
     return this.forward<UserProfileDto>({
       method: 'GET',
       url: '/auth/me',
-      headers: authorization === undefined ? {} : { authorization },
+      headers: {
+        ...correlationHeaders(),
+        ...(authorization === undefined ? {} : { authorization }),
+      },
     });
   }
 }

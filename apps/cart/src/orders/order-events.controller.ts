@@ -1,3 +1,4 @@
+import { runWithCorrelationId } from '@ecommerce/observability';
 import {
   EventPattern as Events,
   type OrderConfirmedPayload,
@@ -37,27 +38,32 @@ export class OrderEventsController {
   async onOrderConfirmed(
     @Payload() order: OrderConfirmedPayload,
   ): Promise<void> {
-    // Converts the cart NAMED IN THE EVENT, not "the user's active cart".
-    //
-    // Those are the same thing when the message arrives promptly and
-    // different things when it does not. A broker that was down for a minute
-    // delivers an event about a cart the customer has already replaced — and
-    // converting whatever is active now would silently empty a basket they
-    // are still filling.
-    const converted = await this.carts.markConverted(order.cartId);
+    // The id crossed the broker in the payload. Putting it back into the
+    // async context is what makes this handler's logs part of the same
+    // story as the checkout that caused it.
+    await runWithCorrelationId(order.correlationId, async () => {
+      // Converts the cart NAMED IN THE EVENT, not "the user's active cart".
+      //
+      // Those are the same thing when the message arrives promptly and
+      // different things when it does not. A broker that was down for a minute
+      // delivers an event about a cart the customer has already replaced — and
+      // converting whatever is active now would silently empty a basket they
+      // are still filling.
+      const converted = await this.carts.markConverted(order.cartId);
 
-    if (converted) {
-      this.logger.log(
-        `order ${order.orderNumber}: cart ${order.cartId} marked CONVERTED`,
+      if (converted) {
+        this.logger.log(
+          `order ${order.orderNumber}: cart ${order.cartId} marked CONVERTED`,
+        );
+        return;
+      }
+
+      // Not an error. Either this event has been delivered before — which
+      // at-least-once delivery makes routine — or the cart has moved on.
+      // Logged at debug because it is expected traffic, not a problem.
+      this.logger.debug(
+        `order ${order.orderNumber}: cart ${order.cartId} was not ACTIVE (duplicate delivery, or already replaced)`,
       );
-      return;
-    }
-
-    // Not an error. Either this event has been delivered before — which
-    // at-least-once delivery makes routine — or the cart has moved on.
-    // Logged at debug because it is expected traffic, not a problem.
-    this.logger.debug(
-      `order ${order.orderNumber}: cart ${order.cartId} was not ACTIVE (duplicate delivery, or already replaced)`,
-    );
+    });
   }
 }

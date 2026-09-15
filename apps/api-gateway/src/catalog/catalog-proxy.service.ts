@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import {
   CategoryDto,
   PaginatedProductsDto,
@@ -29,6 +30,7 @@ export class CatalogProxyService extends UpstreamProxy {
     query: QueryProductsDto,
   ): Promise<{ data: PaginatedProductsDto; headers: Record<string, string> }> {
     return this.forwardWithHeaders<PaginatedProductsDto>({
+      headers: correlationHeaders(),
       method: 'GET',
       url: '/products',
       // `params`, not string concatenation. axios serialises and URL-encodes
@@ -42,6 +44,7 @@ export class CatalogProxyService extends UpstreamProxy {
     id: string,
   ): Promise<{ data: ProductDto; headers: Record<string, string> }> {
     return this.forwardWithHeaders<ProductDto>({
+      headers: correlationHeaders(),
       method: 'GET',
       url: `/products/${id}`,
     });
@@ -49,6 +52,7 @@ export class CatalogProxyService extends UpstreamProxy {
 
   createProduct(body: unknown): Promise<ProductDto> {
     return this.forward<ProductDto>({
+      headers: correlationHeaders(),
       method: 'POST',
       url: '/products',
       data: body,
@@ -57,6 +61,7 @@ export class CatalogProxyService extends UpstreamProxy {
 
   updateProduct(id: string, body: unknown): Promise<ProductDto> {
     return this.forward<ProductDto>({
+      headers: correlationHeaders(),
       method: 'PATCH',
       url: `/products/${id}`,
       data: body,
@@ -71,6 +76,7 @@ export class CatalogProxyService extends UpstreamProxy {
 
   listCategories(includeInactive: boolean): Promise<CategoryDto[]> {
     return this.forward<CategoryDto[]>({
+      headers: correlationHeaders(),
       method: 'GET',
       url: '/categories',
       params: { includeInactive },
@@ -79,6 +85,7 @@ export class CatalogProxyService extends UpstreamProxy {
 
   getCategory(id: string): Promise<CategoryDto> {
     return this.forward<CategoryDto>({
+      headers: correlationHeaders(),
       method: 'GET',
       url: `/categories/${id}`,
     });
@@ -86,6 +93,7 @@ export class CatalogProxyService extends UpstreamProxy {
 
   createCategory(body: unknown): Promise<CategoryDto> {
     return this.forward<CategoryDto>({
+      headers: correlationHeaders(),
       method: 'POST',
       url: '/categories',
       data: body,
@@ -94,6 +102,7 @@ export class CatalogProxyService extends UpstreamProxy {
 
   updateCategory(id: string, body: unknown): Promise<CategoryDto> {
     return this.forward<CategoryDto>({
+      headers: correlationHeaders(),
       method: 'PATCH',
       url: `/categories/${id}`,
       data: body,

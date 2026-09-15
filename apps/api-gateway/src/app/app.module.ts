@@ -1,4 +1,5 @@
 import { RedisModule } from '@ecommerce/redis';
+import { ObservabilityModule } from '@ecommerce/observability';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -31,6 +32,14 @@ import { gatewayEnvSchema } from '../config/env.validation';
       validationSchema: gatewayEnvSchema,
       validationOptions: { abortEarly: false, allowUnknown: true },
       cache: true,
+    }),
+
+    // Registered right after the config, and before anything that logs:
+    // every other module in this app resolves the logger from here.
+    ObservabilityModule.forRoot({
+      service: 'gateway',
+      level: process.env.LOG_LEVEL ?? 'info',
+      pretty: process.env.LOG_PRETTY === 'true',
     }),
     RedisModule.forRootAsync({
       inject: [ConfigService],

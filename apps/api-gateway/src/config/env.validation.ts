@@ -15,6 +15,8 @@ import * as Joi from 'joi';
  */
 export interface GatewayEnv {
   NODE_ENV: 'development' | 'test' | 'production';
+  LOG_LEVEL: string;
+  LOG_PRETTY: boolean;
   API_GATEWAY_PORT: number;
   API_GLOBAL_PREFIX: string;
   AUTH_SERVICE_URL: string;
@@ -37,6 +39,20 @@ export const gatewayEnvSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'test', 'production')
     .default('development'),
+
+  // How much to say. `debug` in development; `info` in production, where a
+  // debug line per request costs real money in log storage and buries the
+  // lines that matter. Configuration rather than a constant, so turning it
+  // up during an incident is an environment change, not a deploy.
+  LOG_LEVEL: Joi.string()
+    .valid('trace', 'debug', 'info', 'warn', 'error', 'fatal')
+    .default('info'),
+
+  // Colourised, human-readable output instead of JSON. ON locally because
+  // reading JSON by eye is miserable; OFF everywhere else, because a log
+  // shipper needs the JSON and pino-pretty costs a whole extra process to
+  // produce something no machine can parse.
+  LOG_PRETTY: Joi.boolean().default(false),
 
   API_GATEWAY_PORT: Joi.number().port().default(3000),
 

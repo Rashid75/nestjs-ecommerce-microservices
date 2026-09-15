@@ -1,4 +1,5 @@
 import { RedisModule } from '@ecommerce/redis';
+import { ObservabilityModule } from '@ecommerce/observability';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CategoriesModule } from '../categories/categories.module';
@@ -22,6 +23,14 @@ import { ProductsModule } from '../products/products.module';
       validationSchema: productEnvSchema,
       validationOptions: { abortEarly: false, allowUnknown: true },
       cache: true,
+    }),
+
+    // Registered right after the config, and before anything that logs:
+    // every other module in this app resolves the logger from here.
+    ObservabilityModule.forRoot({
+      service: 'product',
+      level: process.env.LOG_LEVEL ?? 'info',
+      pretty: process.env.LOG_PRETTY === 'true',
     }),
     DatabaseModule,
 

@@ -1,3 +1,4 @@
+import { correlationHeaders } from '@ecommerce/observability';
 import {
   IDEMPOTENCY_KEY_HEADER,
   IDEMPOTENT_REPLAY_HEADER,
@@ -34,6 +35,7 @@ export class PaymentsProxyService extends UpstreamProxy {
   ): Record<string, string> {
     return {
       'x-user-id': userId,
+      ...correlationHeaders(),
       ...(idempotencyKey === undefined
         ? {}
         : { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey }),
