@@ -23,6 +23,7 @@ export interface InventoryEnv {
   NODE_ENV: 'development' | 'test' | 'production';
   LOG_LEVEL: string;
   LOG_PRETTY: boolean;
+  OTEL_ENABLED: boolean;
   INVENTORY_SERVICE_PORT: number;
 
   INVENTORY_DB_HOST: string;
@@ -54,6 +55,12 @@ export const inventoryEnvSchema = Joi.object({
   // shipper needs the JSON and pino-pretty costs a whole extra process to
   // produce something no machine can parse.
   LOG_PRETTY: Joi.boolean().default(false),
+
+  // Tracing is OFF by default. It is read by the tracing bootstrap from
+  // process.env before Nest exists — this entry is here so the variable is
+  // DOCUMENTED and validated like every other, and so a typo is a boot
+  // failure rather than silently no traces.
+  OTEL_ENABLED: Joi.boolean().default(false),
 
   INVENTORY_SERVICE_PORT: Joi.number().port().default(3003),
 

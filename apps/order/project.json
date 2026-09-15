@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "order:build",
         "runBuildTargetDependencies": false,
-        "port": 9234
+        "port": 9234,
+        "env": {
+          "OTEL_SERVICE_NAME": "order"
+        }
       },
       "configurations": {
         "development": {

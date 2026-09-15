@@ -1,3 +1,4 @@
+import { trace } from '@opentelemetry/api';
 import { Injectable, LoggerService, LogLevel } from '@nestjs/common';
 import pino, { type Logger as PinoLogger } from 'pino';
 import { currentCorrelationId } from './correlation';
@@ -67,7 +68,38 @@ export class PinoLoggerService implements LoggerService {
        */
       mixin() {
         const correlationId = currentCorrelationId();
-        return correlationId === undefined ? {} : { correlationId };
+
+        /**
+         * THE LINE THAT JOINS LOGS TO TRACES.
+         *
+         * If a span is active, its ids go on the log line — and every
+         * backend that understands OpenTelemetry (SigNoz included) turns
+         * that into a link. You are reading an error in the logs, you click,
+         * and you are looking at the waterfall of the request that produced
+         * it.
+         *
+         * `trace_id` and `span_id` in snake case, because that is what the
+         * OpenTelemetry logs specification names them and what collectors
+         * look for. It is the one place in this codebase where the
+         * convention is not ours to choose.
+         *
+         * Undefined when tracing is off, which is most of the time locally —
+         * the fields simply do not appear, and the correlation id is still
+         * there to join by.
+         *
+         * OpenTelemetry's own Pino instrumentation injects these too when it
+         * is running, along with `trace_flags`. The overlap is harmless — the
+         * values are identical — and doing it here as well means the join
+         * does not depend on one auto-instrumentation staying enabled.
+         */
+        const span = trace.getActiveSpan()?.spanContext();
+
+        return {
+          ...(correlationId === undefined ? {} : { correlationId }),
+          ...(span === undefined
+            ? {}
+            : { trace_id: span.traceId, span_id: span.spanId }),
+        };
       },
 
       /**

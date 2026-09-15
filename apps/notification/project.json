@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "notification:build",
         "runBuildTargetDependencies": false,
-        "port": 9236
+        "port": 9236,
+        "env": {
+          "OTEL_SERVICE_NAME": "notification"
+        }
       },
       "configurations": {
         "development": {

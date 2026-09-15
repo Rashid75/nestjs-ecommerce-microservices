@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "product:build",
         "runBuildTargetDependencies": false,
-        "port": 9231
+        "port": 9231,
+        "env": {
+          "OTEL_SERVICE_NAME": "product"
+        }
       },
       "configurations": {
         "development": {

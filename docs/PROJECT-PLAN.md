@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 10 of 15, plus pass 1 of milestone 11                                 |
+| **Milestones complete** | 11 of 15                                                              |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
-| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3                                    |
+| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry                     |
 | **Databases**           | one per service, seven in total                                       |
-| **Next**                | **M11 pass 2** — OpenTelemetry, metrics, SigNoz                       |
+| **Next milestone**      | 12 — Production Hardening                                             |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ██ M11 ▓░ M12 ░░ M13 ░░ M14 ░░ M15 ░░  ← M11 pass 1 of 2
+M9 ██ M10 ██ M11 ██ M12 ░░ M13 ░░ M14 ░░ M15 ░░
 ```
 
 ---
@@ -534,14 +534,16 @@ Order Service ── order.confirmed ──► ecommerce_events ──► Cart S
 ### Deliberately NOT built
 
 | Not built                           | Comes back when                                                                                                                                                                                                                              |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails — a compensating workflow. Do it when overselling matters more than the complexity does. |
-| **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails.                                                                                         | when it bites  |
-| **Saga + compensation**             | With stock reservation, or with the Payment Service — whichever forces it first.                                                                                                                                                             | M9 candidate   |
-| **Transactional outbox**            | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                                                                                                                  | M10            |
+| **Stock reservation at checkout**   | Two customers can both order the last unit today. Reserving is a write into another service's database, so it needs an undo when a later step fails.                                                                                         | when it bites |
+| **Saga + compensation**             | With stock reservation, or with the Payment Service — whichever forces it first.                                                                                                                                                             | M9 candidate  |
+| **Transactional outbox**            | A lost event costs something real — an unsent email, an unpicked warehouse order. Today the worst case is a cart left full.                                                                                                                  | M10           |
 | **`Idempotency-Key` on checkout**   | When a double-clicked checkout is observed creating two orders. The window is already small: the second click usually finds an empty cart.                                                                                                   |
-| **OpenTelemetry + SigNoz**          | M11 pass 2. Logs say what happened; a trace says where the time went, and a metric says how often.                                                                                                                                           | **M11 pass 2** |
-| **Log shipping**                    | Logs are JSON on stdout, which is right — but nothing collects them. Needed the moment there is more than one machine.                                                                                                                       | M14            |
+| **Trace sampling**                  | Everything is sampled today. Expensive at real volume; a head sampler is one config line.                                                                                                                                                    | when measured |
+| **Custom business metrics**         | A dashboard that needs one. Cheap to add, expensive to have too many of.                                                                                                                                                                     | on demand     |
+| **Alerting**                        | Metrics exist and nothing watches them.                                                                                                                                                                                                      | M12           |
+| **Log shipping**                    | Logs are JSON on stdout, which is right — but nothing collects them. Needed the moment there is more than one machine.                                                                                                                       | M14           |
 | **Order events consumed elsewhere** | The Notification Service, M10 — and that is also when one queue stops being enough and a topic exchange is needed.                                                                                                                           |
 
 ### Verified
@@ -723,11 +725,12 @@ and its costs are written down rather than discovered.
 
 ---
 
-## 🟡 Milestone 11 — Observability
+## ✅ Milestone 11 — Observability
 
-**Pass 1 complete.** Structured logs and correlation ids — the half that
-needs no infrastructure at all. Pass 2 is OpenTelemetry and SigNoz, which
-need containers.
+**Status: complete.** Pass 1 was structured logs and correlation ids — the
+half that needs no infrastructure. Pass 2 added traces and metrics.
+
+Full reference: [docs/OBSERVABILITY.md](OBSERVABILITY.md).
 
 ### The question this answers
 
@@ -808,11 +811,22 @@ silent, intermittent bug that files one customer's actions under another.
 correlation scope has its own tests, including the concurrency case, because
 the failure it prevents is invisible in a log that looks perfectly fine.
 
+Tracing was checked by running the gateway with `OTEL_EXPORTER=console` and
+making a real request: the span carried `http.route: /api/products` with a
+duration matching the log line's `durationMs`, the log line carried
+`trace_id` and `span_id`, and a client-supplied `X-Correlation-Id` was
+adopted and echoed back. With `OTEL_ENABLED=false` the process prints nothing
+and loads none of it.
+
+> SigNoz itself is **not verified here** — it is a Docker Compose stack owned
+> by its own repository. The exporter configuration is standard OTLP/HTTP;
+> see [docs/OBSERVABILITY.md](OBSERVABILITY.md) for how to run it.
+
 ---
 
 ## ⬜ Milestone 12 — Production Hardening
 
-**Next milestone.** Health checks (Terminus), graceful shutdown, retry policies, DLQ
+**Next up.** Health checks (Terminus), graceful shutdown, retry policies, DLQ
 improvements, rate limiting, Helmet, CORS, a global exception filter with the
 project's standard error envelope.
 

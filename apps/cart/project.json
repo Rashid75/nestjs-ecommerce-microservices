@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "cart:build",
         "runBuildTargetDependencies": false,
-        "port": 9233
+        "port": 9233,
+        "env": {
+          "OTEL_SERVICE_NAME": "cart"
+        }
       },
       "configurations": {
         "development": {

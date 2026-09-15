@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "inventory:build",
         "runBuildTargetDependencies": false,
-        "port": 9232
+        "port": 9232,
+        "env": {
+          "OTEL_SERVICE_NAME": "inventory"
+        }
       },
       "configurations": {
         "development": {

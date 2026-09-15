@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 11 — Observability (pass 1).**
+> **Current status: Milestone 11 — Observability.**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -12,7 +12,8 @@ explains why it exists before it is added.
 > M10 had to fix. Emails are deduplicated, because an email is the first
 > thing in this system that cannot simply be done twice. Every line of every
 > log is JSON carrying a **correlation id**, so one customer's journey across
-> eight services is a single `grep`.
+> eight services is a single `grep` — and OpenTelemetry traces show where the
+> time went.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -249,10 +250,12 @@ ecommerce/
 │   ├── money/                        @ecommerce/money · type:lib
 │   │   └── src/lib/money.ts          exact decimals in integer minor units
 │   ├── observability/                @ecommerce/observability · type:lib
+│   │   ├── src/tracing.ts            the side-effect entry point, imported FIRST
 │   │   └── src/lib/
 │   │       ├── correlation.ts        AsyncLocalStorage, and why not a variable
 │   │       ├── correlation.middleware.ts  adopt or mint, per request
-│   │       └── pino-logger.service.ts     Pino behind Nest's LoggerService
+│   │       ├── pino-logger.service.ts     Pino behind Nest's LoggerService
+│   │       └── tracing.ts            OpenTelemetry, lazily loaded and off by default
 │   └── redis/                        @ecommerce/redis · type:lib
 │       └── src/lib/
 │           ├── redis.module.ts       lazily-connected client, key prefix
@@ -260,7 +263,8 @@ ecommerce/
 │
 ├── docs/
 │   ├── PROJECT-PLAN.md               milestones, progress, deferred items
-│   └── SCHEMA.md                     every table, and why it looks like that
+│   ├── SCHEMA.md                     every table, and why it looks like that
+│   └── OBSERVABILITY.md              logs, traces, metrics — and which to reach for
 ├── postman/                          collection + local environment
 ├── tools/
 │   ├── free-ports.mjs                kills orphaned dev servers
@@ -761,6 +765,14 @@ Logs are JSON by default; set `LOG_PRETTY=true` for the colourised form
 above, and `LOG_LEVEL` to turn the volume up during an incident without a
 deploy. Authorization headers, passwords, tokens and anything card-shaped are
 redacted on every line.
+
+For **traces** — where the time actually went — set `OTEL_ENABLED=true`. With
+`OTEL_EXPORTER=console` (the default) spans print to stdout and nothing needs
+installing; with `otlp` they go to SigNoz or any OTLP collector. Every log
+line then also carries `trace_id`, so an error is one click from its
+waterfall.
+
+Full reference: **[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)**.
 
 ### Listing query parameters
 

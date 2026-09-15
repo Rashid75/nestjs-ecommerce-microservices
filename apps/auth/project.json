@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "auth:build",
         "runBuildTargetDependencies": false,
-        "port": 9230
+        "port": 9230,
+        "env": {
+          "OTEL_SERVICE_NAME": "auth"
+        }
       },
       "configurations": {
         "development": {

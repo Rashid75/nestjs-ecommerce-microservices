@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "api-gateway:build",
         "runBuildTargetDependencies": false,
-        "port": 9229
+        "port": 9229,
+        "env": {
+          "OTEL_SERVICE_NAME": "gateway"
+        }
       },
       "configurations": {
         "development": {

@@ -1,3 +1,9 @@
+/**
+ * FIRST IMPORT, DELIBERATELY. OpenTelemetry patches modules as they are
+ * required, so anything imported above this line is the unpatched version
+ * and never appears in a trace. Nest included.
+ */
+import '@ecommerce/observability/tracing';
 import {
   correlationMiddleware,
   PinoLoggerService,

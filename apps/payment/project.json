@@ -55,7 +55,10 @@
       "options": {
         "buildTarget": "payment:build",
         "runBuildTargetDependencies": false,
-        "port": 9235
+        "port": 9235,
+        "env": {
+          "OTEL_SERVICE_NAME": "payment"
+        }
       },
       "configurations": {
         "development": {
