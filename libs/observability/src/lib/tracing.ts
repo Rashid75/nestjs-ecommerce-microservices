@@ -63,7 +63,7 @@ function readOptions(): TracingOptions {
   // Loading it twice is harmless: dotenv never overwrites a variable that is
   // already set, which is also why a value passed on the command line still
   // wins over the file.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+
   const dotenv = require('dotenv') as { config: () => void };
   dotenv.config();
 
@@ -84,7 +84,6 @@ export function startTracing(): boolean {
     return false;
   }
 
-  /* eslint-disable @typescript-eslint/no-require-imports */
   const { NodeSDK } =
     require('@opentelemetry/sdk-node') as typeof import('@opentelemetry/sdk-node');
   const { getNodeAutoInstrumentations } =
@@ -109,7 +108,6 @@ export function startTracing(): boolean {
     options.exporter === 'otlp'
       ? (require('@opentelemetry/sdk-metrics') as typeof import('@opentelemetry/sdk-metrics'))
       : { PeriodicExportingMetricReader: undefined };
-  /* eslint-enable @typescript-eslint/no-require-imports */
 
   const spanProcessor =
     OTLPTraceExporter === undefined

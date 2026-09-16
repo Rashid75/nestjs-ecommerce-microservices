@@ -1,5 +1,6 @@
 import { RedisModule } from '@ecommerce/redis';
 import { ObservabilityModule } from '@ecommerce/observability';
+import { HealthModule } from '@ecommerce/observability/health';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CategoriesModule } from '../categories/categories.module';
@@ -52,6 +53,8 @@ import { ProductsModule } from '../products/products.module';
 
     ProductsModule,
     CategoriesModule,
+
+    HealthModule,
   ],
 })
 export class AppModule {}

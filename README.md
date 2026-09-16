@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 11 — Observability.**
+> **Current status: Milestone 12 — Production Hardening (pass 1).**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -13,7 +13,9 @@ explains why it exists before it is added.
 > thing in this system that cannot simply be done twice. Every line of every
 > log is JSON carrying a **correlation id**, so one customer's journey across
 > eight services is a single `grep` — and OpenTelemetry traces show where the
-> time went.
+> time went. Every service now answers `/health/live` and `/health/ready`,
+> shuts down gracefully, and funnels every error through one filter that tells
+> a customer nothing an attacker could use.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -635,6 +637,36 @@ three or four lines of annotation to every route and DTO, which is noise while
 you are trying to read what the code actually _does_. A collection you can run
 is a better teacher than a page you can only look at.
 
+### Health
+
+On **each service's own port**, not behind the gateway — a probe that reaches
+the Order Service through the gateway tells you about the gateway.
+
+| Method | Path            | Auth | Returns                                     |
+| ------ | --------------- | ---- | ------------------------------------------- |
+| `GET`  | `/health/live`  | —    | 200 if the process can answer. Nothing else |
+| `GET`  | `/health/ready` | —    | 200 / 503 · every dependency, named         |
+
+Two endpoints because an orchestrator asks two questions and reacts to them
+very differently:
+
+| Probe    | Asks                                | A failure means             |
+| -------- | ----------------------------------- | --------------------------- |
+| liveness | "is this process wedged?"           | **kill and restart** it     |
+| readiness | "should this instance get traffic?" | **take it out of the pool** |
+
+So **liveness checks nothing**. A liveness probe that touches the database
+restarts every replica during a database blip — turning a brief dependency
+outage into a total application outage, with the restart storm then keeping
+the database down. Dependencies belong in readiness, where a failure removes
+the instance from the load balancer and leaves it running to recover.
+
+Each check carries a **2-second timeout**: a health endpoint that hangs is
+worse than one that fails, because the probe times out too and takes longer
+to notice. A dependency a service does not have reports `up` with
+`detail: "not configured"` — never silently skipped. The broker is reported
+as `degraded` rather than down in services that still work without it.
+
 ### Auth
 
 | Method | Path                 | Auth   | Returns                   |
@@ -819,7 +851,24 @@ do money arithmetic.
 | 401       | Missing, expired, tampered token; bad credentials                                                                                                       |
 | 404       | Product, category, cart line or order not found                                                                                                         |
 | 409       | Email, SKU, category name or slug in use; category still has products; insufficient stock; cart changed under the customer; order no longer cancellable |
-| 503 / 504 | Downstream service unavailable / timed out                                                                                                              |
+| 500       | Something nobody anticipated. The body carries the correlation id and **nothing else** — the cause is in the log                                        |
+| 503 / 504 | Downstream service unavailable / timed out; `/health/ready` with a dependency down                                                                      |
+
+Every error — including a 500 — leaves in the same envelope:
+
+```json
+{
+  "statusCode": 404,
+  "error": "Not Found",
+  "message": "Order not found",
+  "correlationId": "9f2c1a7e-...",
+  "path": "/api/orders/6e1…",
+  "timestamp": "2026-09-15T11:04:22.517Z"
+}
+```
+
+The `correlationId` is the one thing a customer can usefully quote, and the
+one thing you grep for.
 
 ---
 
@@ -836,14 +885,17 @@ Two files in [`postman/`](postman), both committed:
 **`ecommerce · local`** in the environment picker — a collection-level
 pre-request script fails loudly with a clear message if you forget.
 
-| Folder          | Contents                                                      |
-| --------------- | ------------------------------------------------------------- |
-| `1 · Auth`      | Register → login → me. Saves the token the rest of them use.  |
-| `2 · Catalogue` | Category → product → publish → read, filter, patch.           |
-| `3 · Inventory` | Receive, reserve, release, fulfil, adjust, and the ledger.    |
-| `4 · Cart`      | Get or create, add, upsert, set quantity, remove, empty.      |
-| `5 · Orders`    | Place, read, list, cancel — plus what step 1 does not do yet. |
-| `6 · Cleanup`   | Deletes the product. Run last, or not at all.                 |
+| Folder              | Contents                                                          |
+| ------------------- | ----------------------------------------------------------------- |
+| `0 · Health`        | Liveness and readiness, on each service's own port. Run any time.  |
+| `1 · Auth`          | Register → login → me. Saves the token the rest of them use.      |
+| `2 · Catalogue`     | Category → product → publish → read, filter, patch.               |
+| `3 · Inventory`     | Receive, reserve, release, fulfil, adjust, and the ledger.        |
+| `4 · Cart`          | Get or create, add, upsert, set quantity, remove, empty.          |
+| `5 · Orders`        | Place, read, list, cancel.                                        |
+| `6 · Payments`      | Charge, replay the idempotency key, decline, refund, list.        |
+| `7 · Notifications` | What was sent, and the dedupe ledger behind it.                   |
+| `8 · Cleanup`       | Deletes the product. Run last, or not at all.                     |
 
 Requests are plain — **no assertions**, and only three small scripts that
 hand the token and a couple of ids to the requests that follow. The
@@ -886,6 +938,7 @@ boot if any are missing or malformed.
 | `AUTH_SERVICE_URL`       | gateway | _required_    | Where to forward auth calls              |
 | `PRODUCT_SERVICE_URL`    | gateway | _required_    | Where to forward catalogue calls         |
 | `HTTP_CLIENT_TIMEOUT_MS` | gateway | `5000`        | Deadline for outbound calls              |
+| `CORS_ALLOWED_ORIGINS`   | gateway | _empty_       | Comma-separated browser origins. Empty means **none** |
 | `AUTH_SERVICE_PORT`      | auth    | `3001`        | Internal listening port                  |
 | `AUTH_DB_*`              | auth    | _required_    | Host, port, username, password, database |
 | `AUTH_DB_LOGGING`        | auth    | `false`       | Log emitted SQL — off in production      |
@@ -906,6 +959,9 @@ Rules:
   reach the application log.
 - Real secrets belong in a secret manager. A `.env` file is a
   local-development convenience, not a production mechanism.
+- `CORS_ALLOWED_ORIGINS` defaults to empty, so no browser origin is allowed
+  until one is named. `origin: true` reflects whatever origin asked, which
+  is not a policy — with credentials enabled it is the absence of one.
 
 ---
 

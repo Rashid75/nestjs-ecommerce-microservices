@@ -1,4 +1,5 @@
 import { ObservabilityModule } from '@ecommerce/observability';
+import { HealthModule } from '@ecommerce/observability/health';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CartModule } from '../cart/cart.module';
@@ -25,6 +26,8 @@ import { DatabaseModule } from '../database/database.module';
     DatabaseModule,
 
     CartModule,
+
+    HealthModule,
   ],
 })
 export class AppModule {}

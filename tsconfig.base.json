@@ -26,6 +26,7 @@
       "@ecommerce/contracts": ["./libs/contracts/src/index.ts"],
       "@ecommerce/money": ["./libs/money/src/index.ts"],
       "@ecommerce/observability": ["./libs/observability/src/index.ts"],
+      "@ecommerce/observability/health": ["./libs/observability/src/health.ts"],
       "@ecommerce/observability/tracing": [
         "./libs/observability/src/tracing.ts"
       ],

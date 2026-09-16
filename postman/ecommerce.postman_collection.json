@@ -33,6 +33,117 @@
   ],
   "item": [
     {
+      "name": "0 · Health",
+      "description": "Two endpoints that answer two different questions, and the difference is the whole point.\n\n`/health/live` asks \"is this process wedged?\" — a failure gets the container KILLED and restarted, so it checks NOTHING. A liveness probe that touches the database restarts every replica during a database blip, which turns a brief outage into a total one.\n\n`/health/ready` asks \"should this instance receive traffic?\" — a failure takes it out of the load balancer and leaves it running. That is where dependencies belong: PostgreSQL, Redis, and the broker, each with a 2-second timeout.\n\nThese are on each service's OWN port, not behind the gateway. A probe that reaches the Order Service through the gateway tells you about the gateway.",
+      "item": [
+        {
+          "name": "Gateway — live",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/health/live",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "health",
+                "live"
+              ]
+            },
+            "description": "Returns 200 as long as the event loop can answer. It checks nothing else, on purpose."
+          },
+          "response": []
+        },
+        {
+          "name": "Gateway — ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/health/ready",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "Checks the dependencies this service actually has. Anything it does not have reports up with `detail: \"not configured\"` — reporting \"up\" for something that does not exist would be a lie, and skipping it silently would be worse."
+          },
+          "response": []
+        },
+        {
+          "name": "Order — ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3005/health/ready",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3005",
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "PostgreSQL and the broker. Stop PostgreSQL and call this again: 503, with the failing indicator named — while `/health/live` still answers 200. That difference is the milestone."
+          },
+          "response": []
+        },
+        {
+          "name": "Product — ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3002/health/ready",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3002",
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "The one service with all three: PostgreSQL, Redis and the broker. Stop Redis and watch this: the broker and Redis are reported DEGRADED rather than down where the service still functions without them — taking an instance out of the pool for a stale cache flag turns a partial degradation into a full outage."
+          },
+          "response": []
+        },
+        {
+          "name": "Notification — live",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3007/health/live",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3007",
+              "path": [
+                "health",
+                "live"
+              ]
+            },
+            "description": "The Notification Service has no HTTP traffic of its own to speak of — it consumes events. Liveness is what an orchestrator uses here."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "1 · Auth",
       "description": "Register saves the token every other folder uses. Register generates a fresh email each run, so it can be re-run any number of times.",
       "item": [
@@ -79,8 +190,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/register",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "register"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "register"
+              ]
             },
             "description": "A fresh email per run, so the unique index never turns this into a 409."
           }
@@ -117,8 +234,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "login"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "login"
+              ]
             },
             "description": "200, not 201 — logging in creates nothing."
           }
@@ -135,8 +258,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/me",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "auth", "me"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "me"
+              ]
             },
             "description": "The profile behind the current token."
           }
@@ -194,8 +323,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "categories"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "categories"
+              ]
             },
             "description": "Slug and name are both uniquely indexed, so both are generated per run."
           }
@@ -212,8 +346,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "categories"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "categories"
+              ]
             }
           }
         },
@@ -263,8 +402,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products"
+              ]
             },
             "description": "Note the response: `price` comes back as the string \"1899.00\", and `status` is DRAFT. Nothing goes on sale by accident."
           }
@@ -294,8 +438,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
             },
             "description": "Required before the Cart folder: a DRAFT product cannot be added to a cart."
           }
@@ -312,8 +462,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
             }
           }
         },
@@ -329,8 +485,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products"
+              ]
             }
           }
         },
@@ -346,8 +507,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products"
+              ],
               "query": [
                 {
                   "key": "categoryId",
@@ -402,8 +568,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
             },
             "description": "A partial update: send only what changes. With RabbitMQ running this also publishes `product.price_changed`."
           }
@@ -450,8 +622,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory"
+              ]
             },
             "description": "Opens at zero. Nothing arrives by magic."
           }
@@ -481,8 +658,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/receive",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "receive"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "receive"
+              ]
             },
             "description": "Goods arrived: `onHand` goes up."
           }
@@ -512,8 +696,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/reserve",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "reserve"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "reserve"
+              ]
             },
             "description": "Promised to an order. `onHand` is unchanged — the goods are still in the warehouse — but `available` drops."
           }
@@ -543,8 +734,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/release",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "release"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "release"
+              ]
             },
             "description": "The promise is cancelled. This is the undo for a reservation."
           }
@@ -574,8 +772,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/fulfil",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "fulfil"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "fulfil"
+              ]
             },
             "description": "Shipped: BOTH `onHand` and `reserved` go down."
           }
@@ -605,8 +810,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/adjust",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}", "adjust"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}",
+                "adjust"
+              ]
             },
             "description": "A signed correction with a mandatory reason. An unexplained adjustment is indistinguishable from theft."
           }
@@ -623,7 +835,9 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}/movements",
-              "host": ["{{gatewayUrl}}"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
               "path": [
                 "{{apiPrefix}}",
                 "inventory",
@@ -646,8 +860,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}"
+              ]
             }
           }
         }
@@ -664,7 +884,9 @@
               "listen": "test",
               "script": {
                 "type": "text/javascript",
-                "exec": ["pm.environment.set('cartId', pm.response.json().id);"]
+                "exec": [
+                  "pm.environment.set('cartId', pm.response.json().id);"
+                ]
               }
             }
           ],
@@ -678,8 +900,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart"
+              ]
             },
             "description": "An empty cart, not a 404. Calling it repeatedly yields the same one."
           }
@@ -709,8 +936,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items"
+              ]
             },
             "description": "Note what the response contains that the request did not: `name` and `unitPrice`. Both are snapshotted by the server from the catalogue."
           }
@@ -740,8 +973,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items"
+              ]
             },
             "description": "An upsert: quantity 3 on one line, not a second line."
           }
@@ -771,8 +1010,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items",
+                "{{productId}}"
+              ]
             },
             "description": "PATCH sets the quantity; it is not a delta."
           }
@@ -789,8 +1035,15 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items",
+                "{{productId}}"
+              ]
             }
           }
         },
@@ -806,8 +1059,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart"
+              ]
             },
             "description": "Empties it and KEEPS it — the row carries the identity abandonment analytics rely on."
           }
@@ -843,8 +1101,14 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart/items",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart", "items"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart",
+                "items"
+              ]
             },
             "description": "So there is something to order."
           }
@@ -903,8 +1167,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ]
             },
             "description": "An **empty body**. The lines come from the cart and the owner from the verified token — a client that could name its own prices would order a laptop for a penny.\n\n**Watch the correlation id.** This request sends `X-Correlation-Id`, and the same value comes back on the response. Now search the running services for it:\n\n```bash\nnpm start | grep cid-\n```\n\nThe gateway, the order service, the cart service and the notification service all logged under that one id — across three HTTP hops and one RabbitMQ event. Remove the header and the gateway mints one instead; the chain is identical, you just have to read it off the response."
           }
@@ -921,8 +1190,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders", "{{orderId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders",
+                "{{orderId}}"
+              ]
             },
             "description": "Send this **without** an `X-Correlation-Id` header and look at the response headers: the gateway minted one and echoed it back.\n\nThat is the point of echoing it. A customer whose request failed is holding the one thing you need to investigate it, and they can read it off a support page without knowing what it is.\n\nEvery log line from this request — in the gateway and in the order service — carries that value."
           }
@@ -939,8 +1214,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders", "{{orderId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders",
+                "{{orderId}}"
+              ]
             }
           }
         },
@@ -956,8 +1237,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ],
               "query": [
                 {
                   "key": "page",
@@ -984,8 +1270,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/cart",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "cart"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "cart"
+              ]
             },
             "description": "A NEW empty cart: the old one was marked CONVERTED by the `order.confirmed` event, and `GET /cart` creates a fresh one.\n\n**This is not instant.** The Order Service published the event after its commit; RabbitMQ delivered it; the Cart Service handled it. If you still see the old cart, wait a second and re-send — or check that RabbitMQ is running. That gap is what eventual consistency means in practice."
           }
@@ -1002,8 +1293,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/inventory/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "inventory", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "inventory",
+                "{{productId}}"
+              ]
             },
             "description": "`reserved` is unchanged: nothing calls the Inventory Service at checkout, so two customers can both order the last unit.\n\nFixing it means reserving stock per line — a write into another service’s database, which then needs an undo if a later step fails. That compensating workflow is deliberately not built; it is in the deferred table in `docs/PROJECT-PLAN.md` with the trigger that should bring it back."
           }
@@ -1033,8 +1330,15 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}/cancel",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders", "{{orderId}}", "cancel"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders",
+                "{{orderId}}",
+                "cancel"
+              ]
             },
             "description": "A status change, and an `order.cancelled` event. Nothing was reserved and nobody was charged, so there is nothing to undo — the event is published only after the UPDATE actually matched a row."
           }
@@ -1083,8 +1387,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ]
             },
             "description": "Folder 5 cancels its order at the end, so this makes a fresh CONFIRMED one. Add something to the cart first if it is empty."
           }
@@ -1141,8 +1450,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "201. Note what comes back: a `reference` you could read down a phone, the provider own `providerReference`, a last-4 and a brand — and **not** the token or the key you sent. Anything echoed back ends up in a log.\n\nThe `Idempotency-Key` is generated per run by the pre-request script. A real client generates one per checkout attempt and reuses it across retries."
           }
@@ -1176,8 +1490,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "**200, not 201** — nothing was created. The `Idempotent-Replay: true` header says so, and the body is the SAME payment: same id, same reference, same provider reference.\n\nThis is what a client that timed out actually needs. A 409 would tell it the order is covered; only the key tells it *what happened to its own request*."
           }
@@ -1194,8 +1513,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders/{{orderId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders", "{{orderId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders",
+                "{{orderId}}"
+              ]
             },
             "description": "`payment.succeeded` travelled over RabbitMQ and the Order Service moved the order CONFIRMED to PAID itself. Not instant — if it still says CONFIRMED, re-send. No service writes another service database."
           }
@@ -1212,8 +1537,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments/{{paymentId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments", "{{paymentId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments",
+                "{{paymentId}}"
+              ]
             }
           }
         },
@@ -1229,8 +1560,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ],
               "query": [
                 {
                   "key": "page",
@@ -1270,8 +1606,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "The Payment Service reads the order first and finds it is no longer awaiting payment. This is the check that catches a stale checkout page — but note it is a *check*, not a constraint, and the last request in this folder shows why that matters."
           }
@@ -1313,8 +1654,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ]
             },
             "description": "Add items to the cart first if it is empty — folder 4, or the first request of folder 5."
           }
@@ -1344,8 +1690,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "**402 Payment Required**, and `retryable: false`.\n\nNot 400 — the request was perfectly well formed. Not 500 — nothing broke. Not 503 — sending it again produces the same refusal, and each attempt is a line on the customer statement.\n\nThe attempt is still recorded, with the provider reference, because that is what support quotes on the phone."
           },
@@ -1386,8 +1737,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "**503**, and `retryable: true`. We never got an answer, so the outcome is UNKNOWN — the charge may be settling right now. The row is FAILED with a NULL `providerReference`, which is exactly the case where you most want one."
           }
@@ -1417,8 +1773,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "The provider takes 30 seconds; the deadline is 10. Watch the clock in Postman — this is the failure that makes idempotency keys necessary, because a client that times out does not know whether it was charged."
           }
@@ -1448,8 +1809,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "`forbidNonWhitelisted` rejects it at the gateway, one hop before it could reach a log. A field that is silently ignored is a field somebody will eventually assume is being used."
           }
@@ -1483,8 +1849,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "A different request, so the key does not match and there is nothing to replay. The **order index** refuses it instead — at INSERT, before the provider is called.\n\nRead the message: *nothing was charged*. That is the difference between a constraint and a check: the constraint fires while refusing is still free."
           }
@@ -1518,8 +1889,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/payments",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "payments"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "payments"
+              ]
             },
             "description": "The declined attempt above left the order payable — a decline is not the end of an order, it is the commonest reason to reach for another card.\n\nA NEW key, because a key identifies one ATTEMPT: reusing the old one would replay the 402 forever. Set `orderId2` to the order you declined, or just re-run the two requests above."
           }
@@ -1555,8 +1931,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "notifications"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "notifications"
+              ],
               "query": [
                 {
                   "key": "page",
@@ -1583,8 +1964,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "notifications"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "notifications"
+              ],
               "query": [
                 {
                   "key": "type",
@@ -1607,8 +1993,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "notifications"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "notifications"
+              ],
               "query": [
                 {
                   "key": "status",
@@ -1656,8 +2047,13 @@
             },
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/orders",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "orders"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "orders"
+              ]
             },
             "description": "Add something to the cart first if it is empty (folder 4). Then re-run the first request in this folder: a new ORDER_CONFIRMED appears a moment later.\n\nWatch the Cart Service log at the same time. **Both** services received this one event, each with its own copy — the cart converted itself and the notification service emailed. On the single shared queue this project used until M10, they would have taken turns.\n\nNote also what each did with a redelivery. The cart is safe for free (`WHERE status = 'ACTIVE'`); the notification service had to claim the event id to be safe at all."
           }
@@ -1674,8 +2070,13 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/notifications",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "notifications"],
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "notifications"
+              ],
               "query": [
                 {
                   "key": "type",
@@ -1704,8 +2105,14 @@
             ],
             "url": {
               "raw": "{{gatewayUrl}}/{{apiPrefix}}/products/{{productId}}",
-              "host": ["{{gatewayUrl}}"],
-              "path": ["{{apiPrefix}}", "products", "{{productId}}"]
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "products",
+                "{{productId}}"
+              ]
             },
             "description": "Soft delete: the row stays and `deleted_at` is set, so orders that reference this product still make sense. Kept in its own folder because deleting the product breaks every folder above it."
           }

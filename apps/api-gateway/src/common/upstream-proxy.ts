@@ -79,6 +79,37 @@ export abstract class UpstreamProxy {
   protected async forwardWithHeaders<T>(
     request: AxiosRequestConfig,
   ): Promise<{ data: T; headers: Record<string, string>; status: number }> {
+    return this.attempt<T>(request, 0);
+  }
+
+  /**
+   * One attempt, with a retry for the narrow case where a retry is safe.
+   *
+   * DO NOT BLINDLY RETRY. Two questions decide it, and both have to be yes:
+   *
+   *   IS IT SAFE TO REPEAT?  Only for methods that are IDEMPOTENT by
+   *                          definition — GET and HEAD. Retrying a POST can
+   *                          place a second order or take a second payment,
+   *                          and the gateway has no way to know whether the
+   *                          first one landed. The Payment Service solves
+   *                          that for itself with an idempotency key,
+   *                          because it is the only component that can.
+   *
+   *   COULD IT WORK NEXT TIME?  Only when there was NO RESPONSE — a refused
+   *                          connection, a reset socket, a DNS blip. A
+   *                          service that answered 404 will answer 404
+   *                          again, and a service that answered 500 has
+   *                          already done whatever it did.
+   *
+   * A timeout is deliberately NOT retried. It is the case where we do not
+   * know whether the work happened, and repeating unknown work is how a
+   * retry policy turns one slow request into three slow requests and a
+   * duplicate.
+   */
+  private async attempt<T>(
+    request: AxiosRequestConfig,
+    retriesUsed: number,
+  ): Promise<{ data: T; headers: Record<string, string>; status: number }> {
     try {
       const response = await firstValueFrom(this.http.request<T>(request));
 
@@ -108,6 +139,22 @@ export abstract class UpstreamProxy {
         );
       }
 
+      if (this.shouldRetry(request, axiosError, retriesUsed)) {
+        // Exponential, so a struggling service is not hammered by every
+        // gateway replica in lockstep. At one retry the jitter matters less
+        // than it will at five, and it is here because adding it later means
+        // remembering to.
+        const delayMs = RETRY_BASE_DELAY_MS * 2 ** retriesUsed;
+        const jitterMs = Math.floor(Math.random() * RETRY_BASE_DELAY_MS);
+
+        this.upstreamLogger.warn(
+          `${this.upstreamName} ${axiosError.code ?? 'unreachable'} on ${request.method} ${request.url} — retrying in ${delayMs + jitterMs}ms`,
+        );
+
+        await sleep(delayMs + jitterMs);
+        return this.attempt<T>(request, retriesUsed + 1);
+      }
+
       this.upstreamLogger.error(
         `${this.upstreamName} unreachable: ${axiosError.code ?? 'unknown'} on ${request.method} ${request.url}`,
       );
@@ -130,4 +177,50 @@ export abstract class UpstreamProxy {
       );
     }
   }
+
+  private shouldRetry(
+    request: AxiosRequestConfig,
+    error: AxiosError,
+    retriesUsed: number,
+  ): boolean {
+    if (retriesUsed >= MAX_RETRIES) {
+      return false;
+    }
+
+    // Idempotent methods only. `method` is optional in axios's type and
+    // defaults to GET, which is exactly the case we want to allow — but
+    // treating "absent" as safe by accident is not the same as deciding it.
+    const method = (request.method ?? 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') {
+      return false;
+    }
+
+    // A timeout means the request may have been PROCESSED. Everything else
+    // here means it demonstrably was not.
+    return (
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ECONNRESET' ||
+      error.code === 'EAI_AGAIN' ||
+      error.code === 'ENOTFOUND'
+    );
+  }
+}
+
+/**
+ * ONE retry, not five.
+ *
+ * Every retry is load added to a system that is already failing, multiplied
+ * by every replica doing the same thing. One is enough to ride out a
+ * restarting container; more is a way of turning a small outage into a
+ * stampede that prevents recovery.
+ */
+const MAX_RETRIES = 1;
+const RETRY_BASE_DELAY_MS = 100;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    // A pending retry must never delay a graceful shutdown.
+    timer.unref?.();
+  });
 }

@@ -1,5 +1,6 @@
 import { RedisModule } from '@ecommerce/redis';
 import { ObservabilityModule } from '@ecommerce/observability';
+import { HealthModule } from '@ecommerce/observability/health';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -69,6 +70,8 @@ import { gatewayEnvSchema } from '../config/env.validation';
     // Same argument as making JwtAuthGuard global later: default to
     // protected, opt out deliberately.
     { provide: APP_GUARD, useClass: RateLimitGuard },
+
+    HealthModule,
   ],
 })
 export class AppModule {}

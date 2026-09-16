@@ -6,6 +6,7 @@
 import '@ecommerce/observability/tracing';
 import { ServiceQueue } from '@ecommerce/contracts';
 import {
+  AllExceptionsFilter,
   correlationMiddleware,
   PinoLoggerService,
 } from '@ecommerce/observability';
@@ -42,6 +43,30 @@ async function bootstrap() {
    * request went.
    */
   app.use(correlationMiddleware(logger));
+
+  /**
+   * The last line of defence. Every error leaves in the same shape, and an
+   * error nobody anticipated becomes a 500 carrying nothing but the
+   * correlation id — while the real cause goes to the log.
+   */
+  app.useGlobalFilters(new AllExceptionsFilter(logger));
+
+  /**
+   * GRACEFUL SHUTDOWN. Without this, Nest never runs `onModuleDestroy` /
+   * `onApplicationShutdown` and the process simply dies on SIGTERM: requests
+   * in flight are cut off mid-response, and the database and broker
+   * connections are dropped rather than closed.
+   *
+   * With it, `app.close()` stops the HTTP server accepting new connections,
+   * lets the in-flight ones finish, then tears the modules down in reverse
+   * dependency order — so the RabbitMQ consumer stops before the database it
+   * writes to closes.
+   *
+   * This matters in exactly one place and it is not development: a container
+   * orchestrator sends SIGTERM and then waits a grace period before SIGKILL.
+   * Everything you want to finish has to finish inside it.
+   */
+  app.enableShutdownHooks();
 
   app.useGlobalPipes(
     new ValidationPipe({

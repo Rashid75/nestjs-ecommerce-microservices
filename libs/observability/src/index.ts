@@ -9,5 +9,8 @@
  */
 export * from './lib/correlation';
 export * from './lib/correlation.middleware';
+// Health is NOT exported here: see src/health.ts for why Terminus has to
+// stay behind its own entry point.
+export * from './lib/http-exception.filter';
 export * from './lib/observability.module';
 export * from './lib/pino-logger.service';

@@ -30,6 +30,7 @@ export interface GatewayEnv {
   HTTP_CLIENT_TIMEOUT_MS: number;
   PAYMENT_GATEWAY_TIMEOUT_MS: number;
 
+  CORS_ALLOWED_ORIGINS: string;
   REDIS_URL: string;
   RATE_LIMIT_LIMIT: number;
   RATE_LIMIT_WINDOW_SECONDS: number;
@@ -101,6 +102,16 @@ export const gatewayEnvSchema = Joi.object({
     .min(1_000)
     .max(120_000)
     .default(20_000),
+
+  /**
+   * Comma-separated browser origins allowed to call this API.
+   *
+   * EMPTY BY DEFAULT, which means no browser origin is allowed at all. That
+   * is the correct default for a system with no browser client: CORS is a
+   * control you open deliberately, one origin at a time, and a default of
+   * "anything" is a default nobody revisits.
+   */
+  CORS_ALLOWED_ORIGINS: Joi.string().allow('').default(''),
 
   // Required, unlike the cache. Rate limiting needs ONE counter shared by
   // every gateway replica — an in-memory counter means three replicas each

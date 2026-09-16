@@ -1,4 +1,5 @@
 import { ObservabilityModule } from '@ecommerce/observability';
+import { HealthModule } from '@ecommerce/observability/health';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { orderEnvSchema } from '../config/env.validation';
@@ -25,6 +26,8 @@ import { OrdersModule } from '../orders/orders.module';
     DatabaseModule,
 
     OrdersModule,
+
+    HealthModule,
   ],
 })
 export class AppModule {}

@@ -1,4 +1,5 @@
 import { ObservabilityModule } from '@ecommerce/observability';
+import { HealthModule } from '@ecommerce/observability/health';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { inventoryEnvSchema } from '../config/env.validation';
@@ -32,6 +33,8 @@ import { InventoryModule } from '../inventory/inventory.module';
     DatabaseModule,
 
     InventoryModule,
+
+    HealthModule,
   ],
 })
 export class AppModule {}

@@ -1,7 +1,7 @@
 # Project Plan & Progress
 
 The 15-milestone plan for this backend, with what is actually built as of
-**2026-09-04**.
+**2026-09-15**.
 
 This file is the source of truth for progress. It is updated at the end of
 every milestone — completed work moves from _Planned_ to _Delivered_, and
@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 11 of 15                                                              |
+| **Milestones complete** | 11 of 15, plus Milestone 12 pass 1                                    |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry                     |
 | **Databases**           | one per service, seven in total                                       |
-| **Next milestone**      | 12 — Production Hardening                                             |
+| **Next milestone**      | 12 pass 2 — auth hardening (RS256, RBAC, refresh tokens)               |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ██ M11 ██ M12 ░░ M13 ░░ M14 ░░ M15 ░░
+M9 ██ M10 ██ M11 ██ M12 ▓░ M13 ░░ M14 ░░ M15 ░░
 ```
 
 ---
@@ -824,11 +824,135 @@ and loads none of it.
 
 ---
 
-## ⬜ Milestone 12 — Production Hardening
+## 🟡 Milestone 12 — Production Hardening
 
-**Next up.** Health checks (Terminus), graceful shutdown, retry policies, DLQ
-improvements, rate limiting, Helmet, CORS, a global exception filter with the
-project's standard error envelope.
+**Pass 1 complete. Pass 2 next** — see _Planned, pass 2_ below.
+Simple first, then the complexity, inside the same milestone (working
+agreement, rule 8).
+
+### The question this answers
+
+> "The Order Service is running. Should it be sent traffic?"
+
+Those are two different questions, and answering them with one endpoint is
+the most common way a health check makes an outage worse. A process can be
+alive and useless — its database connection gone, its broker disconnected —
+and a process can be temporarily unable to serve while being perfectly
+healthy. An orchestrator reacts to the two very differently:
+
+| Probe                | Asks                                | A failure means             | Depends on          |
+| -------------------- | ----------------------------------- | --------------------------- | ------------------- |
+| `GET /health/live`   | "is this process wedged?"           | **kill and restart** it     | nothing at all      |
+| `GET /health/ready`  | "should this instance get traffic?" | **take it out of the pool** | database, Redis, broker |
+
+The line that matters: **liveness checks nothing**. A liveness probe that
+touches the database restarts every replica during a database blip, turning
+a brief dependency outage into a total application outage — and the restarts
+themselves then hammer the recovering database. Readiness is where
+dependencies belong, because failing it removes the instance from the load
+balancer and _leaves it running_ to recover.
+
+### Delivered — pass 1
+
+**Health checks** (`@nestjs/terminus`), on all eight services:
+
+- `GET /health/live` — returns 200 if the event loop can answer. Nothing else.
+- `GET /health/ready` — `SELECT 1` against PostgreSQL, `PING` against Redis,
+  and the broker connection state. Each with a **2-second timeout**, because
+  a health endpoint that hangs is worse than one that fails: the probe itself
+  then times out and takes longer to notice.
+- A dependency a service does not have reports `up` with
+  `detail: "not configured"` rather than being silently skipped.
+- The broker is **degraded, not down**, in services that survive without it.
+  The Cart Service still serves carts with RabbitMQ disconnected; only its
+  catalogue flags go stale. Failing readiness for that would turn a partial
+  degradation into a full outage.
+
+Health lives behind its own entry point, `@ecommerce/observability/health`,
+and is **deliberately not re-exported** from the library barrel. Terminus v12
+ships ESM only; re-exported from `index.ts`, every service's Jest suite would
+load it transitively through any import of the library and fail before
+running an assertion. The same shape as
+`@ecommerce/observability/tracing`, for a related reason.
+
+**A global exception filter** (`AllExceptionsFilter`), on all eight services.
+Two jobs, and the second is the one that matters:
+
+1. Every error leaves in the same envelope — `statusCode`, `error`,
+   `message`, `correlationId`, `path`, `timestamp` — so a client parses one
+   shape.
+2. An error **nobody anticipated** becomes a 500 containing nothing but the
+   correlation id, while the real cause goes to the log.
+
+A `QueryFailedError` message names the table, the column and the failing
+constraint. `insert or update on table "orders" violates foreign key
+constraint "orders_user_id_fkey"` is a free schema disclosure, and it reaches
+a customer the moment anyone "improves" a handler to include `error.message`.
+A test asserts that it does not.
+
+Deliberate errors keep everything they were given: a 402 keeps its
+`failureCode` and `retryable`, a `BadRequestException` keeps
+class-validator's array of messages. The filter flattens the _unknown_, not
+the considered. It also **rethrows** anything whose host is not HTTP — a
+RabbitMQ handler's failure must be nacked by Nest's RMQ machinery, not turned
+into an HTTP response against an undefined response object.
+
+**Graceful shutdown** — `app.enableShutdownHooks()` on all eight. Without it
+Nest never runs `onApplicationShutdown` and the process simply dies on
+SIGTERM: in-flight requests cut mid-response, database and broker connections
+dropped rather than closed. With it, modules tear down in reverse dependency
+order, so the RabbitMQ consumer stops before the database it writes to
+closes. Every internal timer added in this milestone is `unref()`'d so a
+pending retry or probe cannot hold the grace period open.
+
+**Helmet and CORS**, on the **gateway only**. The internal services bind to
+127.0.0.1 and are never spoken to by a browser, so `X-Frame-Options` on the
+Cart Service protects nothing. Defence in depth is real and is not an
+argument for putting a control where it cannot apply — that is noise that
+hides the controls that matter.
+
+CORS is an **allow-list**, driven by `CORS_ALLOWED_ORIGINS`, and the default
+is **empty, meaning no browser origin is allowed**. `origin: true` reflects
+whatever origin asked, which is not a policy; with credentials enabled it is
+the absence of one.
+
+**A retry policy** in `UpstreamProxy`, and mostly a policy about _not_
+retrying. Two questions, both of which must be yes:
+
+- **Safe to repeat?** GET and HEAD only. Retrying a POST can place a second
+  order or take a second payment, and the gateway cannot know whether the
+  first one landed. The Payment Service solves that for itself with an
+  idempotency key, because it is the only component that can.
+- **Could it work next time?** Only when there was **no response** —
+  `ECONNREFUSED`, `ECONNRESET`, a DNS blip. A service that answered 404 will
+  answer 404 again.
+
+A **timeout is deliberately not retried**: it is precisely the case where we
+do not know whether the work happened. One retry, not five, with exponential
+backoff plus jitter — every retry is load added to a system that is already
+failing, multiplied by every replica doing the same thing.
+
+### Verify
+
+```bash
+curl http://localhost:3000/health/live
+curl http://localhost:3000/health/ready
+```
+
+Then stop PostgreSQL and call `/health/ready` again: it answers **503** with
+the failing indicator named, while `/health/live` still answers **200**. That
+difference is the whole milestone.
+
+### Planned — pass 2
+
+- RS256 signing keys (the JWT is HS256 today — a shared secret every service
+  could use to _mint_ tokens, not just verify them).
+- Role guards and RBAC.
+- **Authentication on the catalogue and inventory write endpoints** — the
+  long-standing known gap below.
+- Refresh tokens.
+- DLQ improvements: a parking queue with a replay path, rather than a message
+  that is nacked forever.
 
 ---
 
