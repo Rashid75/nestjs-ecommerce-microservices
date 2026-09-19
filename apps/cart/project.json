@@ -3,7 +3,10 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "apps/cart/src",
   "projectType": "application",
-  "tags": ["type:app", "scope:cart"],
+  "tags": [
+    "type:app",
+    "scope:cart"
+  ],
   "targets": {
     "build": {
       "executor": "nx:run-commands",
@@ -23,7 +26,9 @@
       }
     },
     "prune-lockfile": {
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "cache": true,
       "executor": "@nx/js:prune-lockfile",
       "outputs": [
@@ -35,30 +40,36 @@
       }
     },
     "copy-workspace-modules": {
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "cache": true,
-      "outputs": ["{workspaceRoot}/dist/apps/cart/workspace_modules"],
+      "outputs": [
+        "{workspaceRoot}/dist/apps/cart/workspace_modules"
+      ],
       "executor": "@nx/js:copy-workspace-modules",
       "options": {
         "buildTarget": "build"
       }
     },
     "prune": {
-      "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
+      "dependsOn": [
+        "prune-lockfile",
+        "copy-workspace-modules"
+      ],
       "executor": "nx:noop"
     },
     "serve": {
       "continuous": true,
       "executor": "@nx/js:node",
       "defaultConfiguration": "development",
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "options": {
         "buildTarget": "cart:build",
         "runBuildTargetDependencies": false,
-        "port": 9233,
-        "env": {
-          "OTEL_SERVICE_NAME": "cart"
-        }
+        "port": 9233
       },
       "configurations": {
         "development": {

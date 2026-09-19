@@ -6,12 +6,11 @@ import * as Joi from 'joi';
  * The gateway owns no database and no secrets — it routes. Its configuration
  * is therefore almost entirely "where do I find the services I forward to".
  *
- * Note there is no JWT_ACCESS_SECRET here. The gateway does not verify tokens
- * in this milestone; it passes the Authorization header through and lets the
- * Auth Service decide. Verifying at the edge is a real option (it rejects bad
- * tokens one hop earlier) but it means giving the gateway the signing key,
- * and a key that can verify an HS256 token can also mint one. The clean
- * version of edge verification needs RS256 asymmetric keys, so it waits.
+ * The one exception is JWT_PUBLIC_KEY_PATH, added in Milestone 12. It is NOT
+ * a secret: the public half of an RS256 keypair verifies tokens and mints
+ * nothing. That is precisely why edge verification waited for RS256 — under
+ * HS256 this variable would have held a key that could issue admin tokens
+ * from the most exposed process in the system.
  */
 export interface GatewayEnv {
   NODE_ENV: 'development' | 'test' | 'production';
@@ -29,6 +28,7 @@ export interface GatewayEnv {
   NOTIFICATION_SERVICE_URL: string;
   HTTP_CLIENT_TIMEOUT_MS: number;
   PAYMENT_GATEWAY_TIMEOUT_MS: number;
+  JWT_PUBLIC_KEY_PATH: string;
 
   CORS_ALLOWED_ORIGINS: string;
   REDIS_URL: string;
@@ -102,6 +102,15 @@ export const gatewayEnvSchema = Joi.object({
     .min(1_000)
     .max(120_000)
     .default(20_000),
+
+  // The PUBLIC half of the RS256 keypair. Required, not optional with a
+  // fallback: a gateway that boots without a verification key is a gateway
+  // that has to decide what to do with tokens it cannot check, and every
+  // answer to that question is worse than refusing to start.
+  JWT_PUBLIC_KEY_PATH: Joi.string().required().messages({
+    'any.required':
+      'JWT_PUBLIC_KEY_PATH is required — run: node tools/generate-jwt-keys.mjs',
+  }),
 
   /**
    * Comma-separated browser origins allowed to call this API.

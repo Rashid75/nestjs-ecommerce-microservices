@@ -3,6 +3,7 @@
  * required, so anything imported above this line is the unpatched version
  * and never appears in a trace. Nest included.
  */
+import './otel-service-name';
 import '@ecommerce/observability/tracing';
 import {
   AllExceptionsFilter,
@@ -135,7 +136,22 @@ async function bootstrap() {
   });
 
   const globalPrefix = config.get('API_GLOBAL_PREFIX', { infer: true });
-  app.setGlobalPrefix(globalPrefix);
+
+  /**
+   * The probes are EXCLUDED from the API prefix.
+   *
+   * `/health/live` on every service, including this one — not `/api/health`
+   * here and `/health` everywhere else. An orchestrator's probe
+   * configuration is per-container, and one service whose path is different
+   * is a misconfiguration waiting to happen: the probe 404s, a 404 is not a
+   * 200, and the container is restarted forever.
+   *
+   * It also keeps the probes out of anything scoped to the public API — the
+   * prefix is what marks a route as customer-facing.
+   */
+  app.setGlobalPrefix(globalPrefix, {
+    exclude: ['health/live', 'health/ready'],
+  });
 
   // See the long note in apps/auth/src/main.ts for what each option does.
   // Both services validate independently: the gateway rejects malformed input

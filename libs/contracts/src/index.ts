@@ -21,6 +21,7 @@ export * from './lib/auth/user-role.enum';
 export * from './lib/auth/register.dto';
 export * from './lib/auth/login.dto';
 export * from './lib/auth/auth-response.dto';
+export * from './lib/auth/jwt-keys';
 
 // --- catalog ---
 export * from './lib/catalog/product-status.enum';

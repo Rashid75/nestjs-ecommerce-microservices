@@ -4,6 +4,7 @@ import {
   InventoryDto,
   StockMovementDto,
   StockOperationDto,
+  UserRole,
 } from '@ecommerce/contracts';
 import {
   Body,
@@ -14,21 +15,31 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  UseGuards,
 } from '@nestjs/common';
+import { AuthenticatedUserGuard } from '../common/authenticated-user.guard';
 import { RateLimit } from '../common/rate-limit.decorator';
+import { Roles } from '../common/roles.decorator';
+import { RolesGuard } from '../common/roles.guard';
 import { InventoryProxyService } from './inventory-proxy.service';
 
 /**
  * The PUBLIC stock API.
  *
- * ⚠️ UNAUTHENTICATED, like the catalogue — and the exposure here is worse.
+ * EVERY WRITE IS ADMIN-ONLY as of Milestone 12. This was the worst of the
+ * open endpoints: `receive` and `adjust` let a caller invent or destroy
+ * stock outright, and `release` let one cancel someone else's reservation.
  *
- * `receive` and `adjust` let a caller invent or destroy stock outright.
- * `release` lets a caller cancel someone else's reservation. Until the RS256
- * / RBAC work lands, this must not be reachable from anywhere but localhost.
+ * Reads stay public — "how many are left" is shown on a product page.
  *
- * Reads are public in a real storefront; writes belong to warehouse staff and
- * internal services. That split is exactly what `@Roles()` will express.
+ * ONE THING THIS IS NOT. `reserve`, `release` and `fulfil` are really
+ * SERVICE-TO-SERVICE operations: the Order Service should perform them, with
+ * an identity of its own, not a human admin over the public API. Marking
+ * them ADMIN is correct today (only an operator calls them) and is the wrong
+ * shape tomorrow. Service identities — a client-credentials token, or mTLS
+ * between services — are the proper answer and are deferred with that
+ * trigger: the first time a service, rather than a person, needs to call
+ * one of these.
  */
 @Controller('inventory')
 export class InventoryController {
@@ -48,11 +59,15 @@ export class InventoryController {
     return this.inventory.movements(productId);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post()
   create(@Body() dto: CreateInventoryDto): Promise<InventoryDto> {
     return this.inventory.create(dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post(':productId/receive')
   @HttpCode(HttpStatus.OK)
   receive(
@@ -76,6 +91,8 @@ export class InventoryController {
    * reservations with a short expiry plus per-user limits, which arrives
    * with the order workflow.
    */
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post(':productId/reserve')
   @HttpCode(HttpStatus.OK)
   @RateLimit({ limit: 30, windowSeconds: 60, name: 'inventory:reserve' })
@@ -86,6 +103,8 @@ export class InventoryController {
     return this.inventory.operation(productId, 'reserve', dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post(':productId/release')
   @HttpCode(HttpStatus.OK)
   release(
@@ -95,6 +114,8 @@ export class InventoryController {
     return this.inventory.operation(productId, 'release', dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post(':productId/fulfil')
   @HttpCode(HttpStatus.OK)
   fulfil(
@@ -104,6 +125,8 @@ export class InventoryController {
     return this.inventory.operation(productId, 'fulfil', dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post(':productId/adjust')
   @HttpCode(HttpStatus.OK)
   adjust(

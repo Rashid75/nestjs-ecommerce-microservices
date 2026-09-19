@@ -1,4 +1,10 @@
-import { AccessTokenClaims } from '@ecommerce/contracts';
+import {
+  AccessTokenClaims,
+  JWT_ALGORITHM,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  loadPemKey,
+} from '@ecommerce/contracts';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
@@ -41,12 +47,24 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       // revocation mechanism a stateless token has.
       ignoreExpiration: false,
 
-      secretOrKey: config.get('JWT_ACCESS_SECRET', { infer: true }),
+      // The PUBLIC key, even here. This service holds the private key too,
+      // but verification has no use for it — and using the signing key to
+      // verify would mean every code path that reads a token had the ability
+      // to mint one. Use the least-powerful key that does the job.
+      secretOrKey: loadPemKey(
+        config.get('JWT_PUBLIC_KEY_PATH', { infer: true }),
+        'JWT public key',
+      ),
 
       // Pin the algorithm. Without this, a token whose header says
-      // `"alg": "none"` — or HS256 when the server expects RS256 — has
-      // historically been accepted by naive verifiers. Say what you accept.
-      algorithms: ['HS256'],
+      // `"alg": "none"` is accepted with no signature at all, and one that
+      // says `"alg": "HS256"` invites the verifier to HMAC it with the
+      // public key — which is public. Say what you accept.
+      algorithms: [JWT_ALGORITHM],
+
+      // WHO minted it and WHO it is for. Both are rejections, not warnings.
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
     });
   }
 

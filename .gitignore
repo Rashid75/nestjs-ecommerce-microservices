@@ -49,3 +49,8 @@ Thumbs.db
 .env.local
 .env.*.local
 !.env.example
+
+# Development JWT signing keys. The private key is a credential; the
+# directory is ignored wholesale so a stray .pem can never be committed.
+/keys
+*.pem

@@ -10,7 +10,7 @@ import * as Joi from 'joi';
  *    turns a config typo into a 3am production incident.
  *
  * 2. NEVER ECHO SECRETS. Validation errors name the KEY that is wrong, never
- *    the VALUE. `AUTH_DB_PASSWORD` and `JWT_ACCESS_SECRET` live in this set,
+ *    the VALUE. `AUTH_DB_PASSWORD` and the key PATHS live in this set,
  *    and a startup error is exactly the sort of thing that gets pasted into a
  *    chat window or shipped to a log aggregator.
  *
@@ -20,8 +20,19 @@ import * as Joi from 'joi';
  * Product Service appears.
  */
 
-/** Minimum length of the HS256 signing key, in characters. */
-const MIN_JWT_SECRET_LENGTH = 32;
+/**
+ * The keys are FILES, not values.
+ *
+ * A PEM is multi-line, and a multi-line value in a `.env` file is a quoting
+ * problem that everyone gets wrong once. A path also keeps the key material
+ * out of the process environment, which matters more than it sounds: `env`
+ * is readable by anything running as the same user, it is captured by most
+ * crash reporters, and it is printed by half the container tooling in
+ * existence.
+ *
+ * A deployed environment mounts the private key as a file from a secret
+ * manager and points this at it — the same shape, with a different source.
+ */
 
 export interface AuthEnv {
   NODE_ENV: 'development' | 'test' | 'production';
@@ -38,7 +49,8 @@ export interface AuthEnv {
   AUTH_DB_LOGGING: boolean;
   AUTH_DB_SSL: boolean;
 
-  JWT_ACCESS_SECRET: string;
+  JWT_PRIVATE_KEY_PATH: string;
+  JWT_PUBLIC_KEY_PATH: string;
   JWT_ACCESS_TTL_SECONDS: number;
   BCRYPT_COST: number;
   RABBITMQ_URL: string;
@@ -82,16 +94,19 @@ export const authEnvSchema = Joi.object({
   AUTH_DB_LOGGING: Joi.boolean().default(false),
   AUTH_DB_SSL: Joi.boolean().default(false),
 
-  // HS256 keys shorter than the 32-byte hash output weaken the signature, and
-  // a short secret can be brute-forced offline by anyone holding one token.
-  // The message below states the requirement without repeating the value.
-  JWT_ACCESS_SECRET: Joi.string()
-    .min(MIN_JWT_SECRET_LENGTH)
-    .required()
-    .messages({
-      'string.min': `JWT_ACCESS_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`,
-      'any.required': 'JWT_ACCESS_SECRET is required',
-    }),
+  // The PRIVATE key. This process is the only one in the system that has it,
+  // and it is the only one that can mint a token.
+  JWT_PRIVATE_KEY_PATH: Joi.string().required().messages({
+    'any.required':
+      'JWT_PRIVATE_KEY_PATH is required — run: node tools/generate-jwt-keys.mjs',
+  }),
+
+  // The PUBLIC key, which this service also needs: `/auth/me` verifies the
+  // token it was handed. Not a secret.
+  JWT_PUBLIC_KEY_PATH: Joi.string().required().messages({
+    'any.required':
+      'JWT_PUBLIC_KEY_PATH is required — run: node tools/generate-jwt-keys.mjs',
+  }),
 
   // 15 minutes. Short, because an access token CANNOT be revoked before it
   // expires — there is no server-side session to delete. The lifetime is the

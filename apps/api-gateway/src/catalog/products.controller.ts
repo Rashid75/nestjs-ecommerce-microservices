@@ -4,6 +4,7 @@ import {
   ProductDto,
   QueryProductsDto,
   UpdateProductDto,
+  UserRole,
 } from '@ecommerce/contracts';
 import {
   Body,
@@ -18,30 +19,32 @@ import {
   Post,
   Query,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { AuthenticatedUserGuard } from '../common/authenticated-user.guard';
+import { Roles } from '../common/roles.decorator';
+import { RolesGuard } from '../common/roles.guard';
 import { CatalogProxyService } from './catalog-proxy.service';
 
 /**
- * The PUBLIC products API.
+ * The products API. READS ARE PUBLIC; WRITES ARE ADMIN-ONLY.
  *
- * ⚠️ WRITE ENDPOINTS ARE CURRENTLY UNAUTHENTICATED.
+ * That split is the point, and it is why the guards are per-method rather
+ * than on the class. A storefront's catalogue is meant to be browsed by
+ * anyone, including a crawler with no account — putting a guard on the
+ * controller would break the shop to protect the four endpoints that
+ * actually need it.
  *
- * Anyone who can reach this gateway can create, edit and delete products.
- * That is a real gap, and it is deliberate rather than overlooked — closing
- * it properly needs a decision this milestone does not own:
+ * CLOSED IN MILESTONE 12, after standing open since M3. It was open because
+ * of a genuine dependency rather than neglect: under HS256 the gateway could
+ * not check a token without holding a key that could also MINT one. RS256
+ * removed that obstacle, and this is the change it unblocked.
  *
- *   - Verifying tokens AT THE GATEWAY means giving the gateway the HS256
- *     signing key. A key that can verify an HS256 token can also mint one,
- *     so every service holding it becomes able to issue admin tokens. The
- *     clean version needs RS256: Auth keeps the private key, everyone else
- *     gets the public one.
- *   - Verifying tokens IN THE PRODUCT SERVICE has the same problem.
- *   - Asking the Auth Service to introspect each token avoids key sharing
- *     but adds a round trip to every request.
- *
- * Role-based access control and the RS256 switch are scheduled together.
- * Until then this service must not be exposed beyond localhost.
+ * Note what is NOT here: a product-level ownership check. There are no
+ * per-seller catalogues in this system, so "is this your product" is not a
+ * question that exists. When it does, it belongs in the Product Service —
+ * the gateway knows who is asking, not what they own.
  */
 @Controller('products')
 export class ProductsController {
@@ -67,11 +70,15 @@ export class ProductsController {
     return result.data;
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post()
   create(@Body() dto: CreateProductDto): Promise<ProductDto> {
     return this.catalog.createProduct(dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Patch(':id')
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
@@ -80,6 +87,8 @@ export class ProductsController {
     return this.catalog.updateProduct(id, dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(

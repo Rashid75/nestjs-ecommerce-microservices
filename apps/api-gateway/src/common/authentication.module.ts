@@ -1,8 +1,17 @@
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  loadPemKey,
+} from '@ecommerce/contracts';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
 import axios from 'axios';
+import { AccessTokenVerifier } from './access-token.verifier';
 import { AuthenticatedUserGuard } from './authenticated-user.guard';
 import { AUTH_HTTP_CLIENT } from './authentication.tokens';
+import { RolesGuard } from './roles.guard';
 import type { GatewayEnv } from '../config/env.validation';
 
 /**
@@ -38,6 +47,31 @@ import type { GatewayEnv } from '../config/env.validation';
  * becomes a two-line change.
  */
 @Module({
+  imports: [
+    /**
+     * The PUBLIC key only.
+     *
+     * `publicKey` with no `privateKey` is not a detail — it is the control.
+     * This module can verify every token in the system and cannot produce
+     * one, and that is enforced by the absence of a key rather than by
+     * anyone remembering not to call `sign()`. Make the dangerous thing
+     * impossible, not merely discouraged.
+     */
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<GatewayEnv, true>) => ({
+        publicKey: loadPemKey(
+          config.get('JWT_PUBLIC_KEY_PATH', { infer: true }),
+          'JWT public key',
+        ),
+        verifyOptions: {
+          algorithms: [JWT_ALGORITHM],
+          issuer: JWT_ISSUER,
+          audience: JWT_AUDIENCE,
+        },
+      }),
+    }),
+  ],
   providers: [
     {
       provide: AUTH_HTTP_CLIENT,
@@ -48,10 +82,20 @@ import type { GatewayEnv } from '../config/env.validation';
           timeout: config.get('HTTP_CLIENT_TIMEOUT_MS', { infer: true }),
         }),
     },
+    AccessTokenVerifier,
     AuthenticatedUserGuard,
+    RolesGuard,
   ],
-  // Both the guard AND the token it needs. See above: the consuming module
-  // constructs its own guard instance, so the token must be resolvable there.
-  exports: [AuthenticatedUserGuard, AUTH_HTTP_CLIENT],
+  // Everything a consuming module needs to BUILD its own guard instances —
+  // see the note above. Exporting the guards without the things they inject
+  // moves the failure from "wrong client" to "cannot resolve dependency",
+  // which is at least loud, but only exporting all of it actually works.
+  exports: [
+    AccessTokenVerifier,
+    AuthenticatedUserGuard,
+    RolesGuard,
+    AUTH_HTTP_CLIENT,
+    JwtModule,
+  ],
 })
 export class AuthenticationModule {}

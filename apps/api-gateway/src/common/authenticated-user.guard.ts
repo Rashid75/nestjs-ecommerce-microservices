@@ -12,6 +12,7 @@ import {
 import type { AxiosError, AxiosInstance } from 'axios';
 import { createHash } from 'node:crypto';
 import type { Request } from 'express';
+import { AccessTokenVerifier } from './access-token.verifier';
 import { AUTH_HTTP_CLIENT } from './authentication.tokens';
 
 /** Where the resolved user is stashed for `@AuthenticatedUser()` to read. */
@@ -34,34 +35,29 @@ const INTROSPECTION_TTL_SECONDS = 30;
 /**
  * Verifies the caller's access token by asking the Auth Service.
  *
- * WHY INTROSPECTION AND NOT LOCAL VERIFICATION.
+ * VERIFY, THEN ASK — two steps that answer two different questions.
  *
- * The obvious approach is for the gateway to verify the JWT signature
- * itself. That requires the signing key — and with HS256 a key that can
- * VERIFY can also MINT. Giving the gateway (a public-facing process) the
- * ability to issue admin tokens, purely so it can read a `sub` claim, is a
- * bad trade.
+ *   1. VERIFY the signature locally with the PUBLIC key (Milestone 12).
+ *      Answers "was this minted by our Auth Service, unaltered, and is it
+ *      still inside its lifetime". Costs microseconds and no network. A
+ *      forged or expired token dies here, so a credential-stuffing run puts
+ *      no load on the Auth Service at all.
  *
- * The clean fix is RS256: the Auth Service keeps the private key, everyone
- * else verifies with the public one and can mint nothing. That migration is
- * still pending. Until then, introspection gives the gateway an identity
- * with NO key sharing at all: it forwards the token to `/auth/me` and
- * believes the answer.
+ *      This was impossible before RS256: under HS256 the verifying key is
+ *      the signing key, and a public-facing gateway able to MINT admin
+ *      tokens is a worse problem than the one it solves.
  *
- * The cost is a round trip per authenticated request. Redis absorbs
- * almost all of it — this is a genuinely good use of the cache, unlike the
- * cart itself.
+ *   2. INTROSPECT, cached 30 seconds. Answers "is this account still active,
+ *      and what is its role RIGHT NOW". A signature cannot answer that — the
+ *      claims are a 15-minute-old photograph of a database row.
  *
- * A comparison worth holding on to:
+ * Doing only step 1 would be faster and would widen the revocation window
+ * from 30 seconds to the full token lifetime. That trade is not made here;
+ * see `access-token.verifier.ts`.
  *
- *   LOCAL VERIFY   fastest, no hop, cannot revoke early, needs key
- *                  distribution and rotation
- *   INTROSPECT     a hop (cached), revocation in ~TTL, no key sharing,
- *                  Auth becomes a hard dependency of every guarded route
- *
- * The last clause is the real cost: Auth being down now breaks the cart, not
- * just login. That is stated rather than hidden, and it is why cart READS
- * would ideally degrade rather than fail — noted as deferred.
+ * Doing only step 2 is what this file did until Milestone 12, and its cost
+ * is that Auth being down breaks the cart, not just login. Step 1 does not
+ * remove that dependency — it only stops junk from reaching it.
  */
 @Injectable()
 export class AuthenticatedUserGuard implements CanActivate {
@@ -82,6 +78,7 @@ export class AuthenticatedUserGuard implements CanActivate {
     // scope", say so.
     @Inject(AUTH_HTTP_CLIENT) private readonly http: AxiosInstance,
     private readonly cache: CacheService,
+    private readonly verifier: AccessTokenVerifier,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -95,7 +92,23 @@ export class AuthenticatedUserGuard implements CanActivate {
       throw new UnauthorizedException('Authentication required');
     }
 
+    // STEP 1. Local, keyless-to-forge, and free. Throws 401 on anything
+    // that is not a genuine, unexpired, correctly-addressed token.
+    const claims = this.verifier.verify(authorization.slice('Bearer '.length));
+
+    // STEP 2. Now that it is known to be authentic, find out whether it is
+    // still TRUE.
     const user = await this.introspect(authorization);
+
+    // The two must agree. They cannot disagree in normal operation, and if
+    // they ever do — a token whose subject is not the account Auth returned
+    // — something is badly wrong and the request must not proceed.
+    if (user.id !== claims.sub) {
+      this.logger.error(
+        `token subject ${claims.sub} does not match introspected user ${user.id}`,
+      );
+      throw new UnauthorizedException('Invalid or expired token');
+    }
 
     // Stash on the request for @AuthenticatedUser() to read, and for the
     // proxy to turn into the X-User-Id header.

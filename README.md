@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 12 — Production Hardening (pass 1).**
+> **Current status: Milestone 12 — Production Hardening (passes 1–2).**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -15,7 +15,10 @@ explains why it exists before it is added.
 > eight services is a single `grep` — and OpenTelemetry traces show where the
 > time went. Every service now answers `/health/live` and `/health/ready`,
 > shuts down gracefully, and funnels every error through one filter that tells
-> a customer nothing an attacker could use.
+> a customer nothing an attacker could use. Tokens are **RS256**, so the
+> gateway can verify one without being able to mint one — which is what
+> finally closed the unauthenticated catalogue and inventory writes that had
+> stood open since M3.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -30,6 +33,7 @@ item back.
 - [Technology stack](#technology-stack)
 - [Repository layout](#repository-layout)
 - [Local setup](#local-setup)
+- [Signing keys](#signing-keys)
 - [Database and migrations](#database-and-migrations)
 - [Caching and rate limiting](#caching-and-rate-limiting)
 - [Messaging](#messaging)
@@ -322,6 +326,46 @@ npm run db:migrate
 ```bash
 npm start
 ```
+
+---
+
+## Signing keys
+
+The Auth Service signs access tokens with **RS256**, so before anything will
+boot:
+
+```bash
+node tools/generate-jwt-keys.mjs
+```
+
+That writes `keys/jwt-private.pem` and `keys/jwt-public.pem`, both
+git-ignored, and `.env` already points at them.
+
+| Key | Who holds it | What it does |
+| --- | --- | --- |
+| private | Auth Service, only | **signs**. Never leaves that process |
+| public | everyone, including the gateway | **verifies**. Forges nothing |
+
+That asymmetry is the point. Under the old HS256 secret, any process that
+could CHECK a token could also MINT one — which is why the gateway could not
+verify tokens at all, and why the catalogue writes stayed open for nine
+milestones.
+
+Tokens carry a `kid`. Nothing reads it yet; it is there so a future rotation
+can keep accepting the old key until the last token issued under it expires.
+
+### Making an admin
+
+There is deliberately no API for it — an endpoint that creates its own
+administrators is a privilege-escalation hole waiting to be found. Register
+normally, then promote the account:
+
+```bash
+psql -U postgres -d ecommerce_auth_db -c "UPDATE users SET role = 'ADMIN' WHERE email = 'you@example.test';"
+```
+
+Log in again afterwards. The role is read from the database on every
+introspection, but the token has to be re-issued for `/auth/me` to report it.
 
 ---
 
@@ -677,7 +721,8 @@ as `degraded` rather than down in services that still work without it.
 
 ### Catalogue
 
-⚠️ **Write endpoints are currently unauthenticated** — see [Known gaps](#known-gaps).
+**Reads are public. Writes require an authenticated ADMIN** — 401 without a
+token, 403 with a customer's. Send `Authorization: Bearer <admin token>`.
 
 | Method   | Path                  | Returns                         |
 | -------- | --------------------- | ------------------------------- |
@@ -943,7 +988,8 @@ boot if any are missing or malformed.
 | `AUTH_DB_*`              | auth    | _required_    | Host, port, username, password, database |
 | `AUTH_DB_LOGGING`        | auth    | `false`       | Log emitted SQL — off in production      |
 | `AUTH_DB_SSL`            | auth    | `false`       | Must be true off-loopback                |
-| `JWT_ACCESS_SECRET`      | auth    | _required_    | HS256 key, min 32 characters             |
+| `JWT_PRIVATE_KEY_PATH`   | auth    | _required_    | RS256 private key. SIGNS. Auth only      |
+| `JWT_PUBLIC_KEY_PATH`    | auth, gateway | _required_ | RS256 public key. VERIFIES. Not a secret |
 | `JWT_ACCESS_TTL_SECONDS` | auth    | `900`         | Access token lifetime                    |
 | `BCRYPT_COST`            | auth    | `12`          | bcrypt work factor (10–15)               |
 | `PRODUCT_SERVICE_PORT`   | product | `3002`        | Internal listening port                  |
@@ -1058,15 +1104,16 @@ sequelize-typescript installs and every property silently reads `undefined`.
 Stated plainly, tracked with triggers in
 [docs/PROJECT-PLAN.md](docs/PROJECT-PLAN.md):
 
-1. **Catalogue AND inventory write endpoints are unauthenticated.** Anyone
-   reaching the gateway can create, edit and delete products, invent or
-   destroy stock via `receive` and `adjust`, or cancel someone else's
-   reservation via `release`. `AuthenticatedUserGuard` now exists, so
-   closing this is a small change — but until it is done, this stack **must
-   not be exposed beyond localhost**.
-2. **Internal services trust `X-User-Id`.** The Cart Service does not verify
-   tokens; it believes a header, safe only because it binds to loopback.
-   Needs a shared secret, mTLS, or RS256 internal tokens.
+1. ~~**Catalogue AND inventory write endpoints are unauthenticated.**~~
+   **CLOSED in M12 pass 2.** Every catalogue and inventory write requires an
+   authenticated ADMIN; reads stay public.
+2. **Internal services trust `X-User-Id`.** The Cart, Order and Payment
+   services do not verify tokens; they believe a header the gateway sets,
+   safe only because they bind to loopback. RS256 makes the fix available —
+   hand each service the public key — so this is now a choice, not a blocker.
+   Related: `reserve`/`release`/`fulfil` are marked ADMIN, which is right
+   while only an operator calls them and wrong once the Order Service does.
+   Service identities are the proper answer.
 3. **Messaging has no retry, dead-letter queue or idempotency.** A failed
    handler loses its message; a duplicate delivery flags a line twice. Both
    are harmless for today's events and neither would be once an event means
@@ -1076,7 +1123,10 @@ Stated plainly, tracked with triggers in
 5. **Rate limiting is per-IP only** and fails open when Redis is down. It
    raises the cost of credential stuffing; it does not stop a distributed
    attack. Per-account lockout and MFA are still absent.
-6. **No RBAC**, though `role` is already a claim and a column.
+6. ~~**No RBAC.**~~ **CLOSED in M12 pass 2** — `@Roles(UserRole.Admin)` and
+   `RolesGuard` at the gateway, checked against the introspected profile
+   rather than the token's claim. Still coarse: two roles, no per-resource
+   permissions and no ownership checks.
 7. **No audit logging** of authentication or catalogue mutations.
 8. **No correlation IDs** — a request cannot yet be traced across services.
 9. **Reservations never expire.** An abandoned cart holds stock indefinitely.
@@ -1084,7 +1134,13 @@ Stated plainly, tracked with triggers in
 10. **Stock operations are not idempotent.** Retrying a reserve after a
     timeout double-reserves (M8).
 11. **`.env` holds development secrets** that have appeared in a terminal
-    transcript. Rotate before any shared environment.
+    transcript. Rotate before any shared environment. The RS256 keypair in
+    `keys/` is generated locally and git-ignored; generate a fresh one for
+    any shared environment and keep the private half in a secret manager.
+12. **Access tokens cannot be revoked** before they expire. The 30-second
+    introspection cache bounds how long a disabled account keeps working;
+    nothing kills a single stolen token. Refresh tokens and a deny-list are
+    the next pass.
 
 ---
 

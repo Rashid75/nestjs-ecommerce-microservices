@@ -2,6 +2,7 @@ import {
   CategoryDto,
   CreateCategoryDto,
   UpdateCategoryDto,
+  UserRole,
 } from '@ecommerce/contracts';
 import {
   Body,
@@ -16,14 +17,16 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { AuthenticatedUserGuard } from '../common/authenticated-user.guard';
+import { Roles } from '../common/roles.decorator';
+import { RolesGuard } from '../common/roles.guard';
 import { CatalogProxyService } from './catalog-proxy.service';
 
 /**
- * The PUBLIC categories API.
- *
- * Same authentication gap as products — see the note on
- * apps/api-gateway/src/catalog/products.controller.ts.
+ * The categories API. Reads public, writes admin-only — the same split as
+ * products, and for the same reasons; see that controller.
  */
 @Controller('categories')
 export class CategoriesController {
@@ -44,11 +47,15 @@ export class CategoriesController {
     return this.catalog.getCategory(id);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Post()
   create(@Body() dto: CreateCategoryDto): Promise<CategoryDto> {
     return this.catalog.createCategory(dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Patch(':id')
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
@@ -57,6 +64,8 @@ export class CategoriesController {
     return this.catalog.updateCategory(id, dto);
   }
 
+  @UseGuards(AuthenticatedUserGuard, RolesGuard)
+  @Roles(UserRole.Admin)
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(

@@ -3,6 +3,7 @@
  * required, so anything imported above this line is the unpatched version
  * and never appears in a trace. Nest included.
  */
+import './otel-service-name';
 import '@ecommerce/observability/tracing';
 import {
   AllExceptionsFilter,

@@ -57,6 +57,7 @@ import { gatewayEnvSchema } from '../config/env.validation';
     OrdersModule,
     PaymentsModule,
     NotificationsModule,
+    HealthModule,
   ],
   providers: [
     // GLOBAL, not per-controller, and that direction matters.
@@ -70,8 +71,6 @@ import { gatewayEnvSchema } from '../config/env.validation';
     // Same argument as making JwtAuthGuard global later: default to
     // protected, opt out deliberately.
     { provide: APP_GUARD, useClass: RateLimitGuard },
-
-    HealthModule,
   ],
 })
 export class AppModule {}

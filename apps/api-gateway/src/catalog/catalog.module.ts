@@ -1,6 +1,7 @@
 import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AuthenticationModule } from '../common/authentication.module';
 import type { GatewayEnv } from '../config/env.validation';
 import { CatalogProxyService } from './catalog-proxy.service';
 import { CategoriesController } from './categories.controller';
@@ -16,6 +17,12 @@ import { ProductsController } from './products.controller';
  */
 @Module({
   imports: [
+    // Brings in the guards AND the things they inject. Nest builds a guard
+    // instance in the context of the module that declares the CONTROLLER, so
+    // importing this is what makes `@UseGuards(AuthenticatedUserGuard)`
+    // resolvable here at all — without it the failure is at startup, which
+    // is the right time for it.
+    AuthenticationModule,
     HttpModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService<GatewayEnv, true>) => ({

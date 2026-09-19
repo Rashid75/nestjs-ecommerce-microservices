@@ -1,12 +1,14 @@
 import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AuthenticationModule } from '../common/authentication.module';
 import type { GatewayEnv } from '../config/env.validation';
 import { InventoryProxyService } from './inventory-proxy.service';
 import { InventoryController } from './inventory.controller';
 
 @Module({
   imports: [
+    AuthenticationModule,
     HttpModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService<GatewayEnv, true>) => ({

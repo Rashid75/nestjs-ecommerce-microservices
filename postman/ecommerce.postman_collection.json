@@ -269,6 +269,88 @@
             },
             "description": "The profile behind the current token."
           }
+        },
+        {
+          "name": "Login as admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('adminAccessToken', pm.response.json().tokens.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/login",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Saves `adminAccessToken`, which folders 2 and 3 use for every WRITE.\n\nThere is no \"register an admin\" endpoint, and that is deliberate: an API that can create its own administrators is a privilege-escalation endpoint waiting to be found. Register normally, then promote the account with SQL:\n\n    UPDATE users SET role = 'ADMIN' WHERE email = '<your admin email>';\n\nRun it against ecommerce_auth_db. Then log in again — the role is read from the database on every introspection, but the ACCOUNT has to exist first."
+          },
+          "response": []
+        },
+        {
+          "name": "Create category — as a CUSTOMER",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Should not exist\",\n  \"slug\": \"should-not-exist\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/categories",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "categories"
+              ]
+            },
+            "description": "Expect **403 Forbidden**, using the ordinary customer token.\n\n403, not 401, and the difference is not pedantry:\n\n    401 Unauthorized  \"I do not know who you are.\"   Log in and retry.\n    403 Forbidden     \"I know who you are. No.\"       Retrying is pointless.\n\nSend it with NO Authorization header at all and you get 401 instead — try it, the two paths are answered by two different guards.\n\nBefore Milestone 12 this request returned **201** and created the category. Anyone who could reach the gateway could edit the catalogue."
+          },
+          "response": []
         }
       ]
     },
@@ -309,7 +391,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -388,7 +470,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -424,7 +506,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -554,7 +636,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -608,7 +690,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -644,7 +726,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -682,7 +764,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -720,7 +802,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -758,7 +840,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -796,7 +878,7 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "body": {
@@ -2100,7 +2182,7 @@
             "header": [
               {
                 "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
+                "value": "Bearer {{adminAccessToken}}"
               }
             ],
             "url": {

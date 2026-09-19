@@ -3,7 +3,10 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "apps/payment/src",
   "projectType": "application",
-  "tags": ["type:app", "scope:payment"],
+  "tags": [
+    "type:app",
+    "scope:payment"
+  ],
   "targets": {
     "build": {
       "executor": "nx:run-commands",
@@ -23,7 +26,9 @@
       }
     },
     "prune-lockfile": {
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "cache": true,
       "executor": "@nx/js:prune-lockfile",
       "outputs": [
@@ -35,30 +40,36 @@
       }
     },
     "copy-workspace-modules": {
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "cache": true,
-      "outputs": ["{workspaceRoot}/dist/apps/payment/workspace_modules"],
+      "outputs": [
+        "{workspaceRoot}/dist/apps/payment/workspace_modules"
+      ],
       "executor": "@nx/js:copy-workspace-modules",
       "options": {
         "buildTarget": "build"
       }
     },
     "prune": {
-      "dependsOn": ["prune-lockfile", "copy-workspace-modules"],
+      "dependsOn": [
+        "prune-lockfile",
+        "copy-workspace-modules"
+      ],
       "executor": "nx:noop"
     },
     "serve": {
       "continuous": true,
       "executor": "@nx/js:node",
       "defaultConfiguration": "development",
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "options": {
         "buildTarget": "payment:build",
         "runBuildTargetDependencies": false,
-        "port": 9235,
-        "env": {
-          "OTEL_SERVICE_NAME": "payment"
-        }
+        "port": 9235
       },
       "configurations": {
         "development": {

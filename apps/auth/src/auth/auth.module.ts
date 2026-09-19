@@ -1,4 +1,10 @@
-import { EVENTS_CLIENT } from '@ecommerce/contracts';
+import {
+  EVENTS_CLIENT,
+  JWT_ALGORITHM,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  loadPemKey,
+} from '@ecommerce/contracts';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -61,31 +67,52 @@ import { JwtStrategy } from './jwt.strategy';
     // decision. Every guard in this codebase names its strategy.
     PassportModule,
 
-    // registerAsync, not register, because the secret comes from validated
+    // registerAsync, not register, because the keys come from validated
     // configuration rather than from a literal. A hardcoded fallback such as
     // `secret: process.env.JWT_SECRET || 'dev-secret'` is one of the most
     // common real-world vulnerabilities: it means production silently runs on
     // a publicly known signing key whenever the variable is missing. Ours
-    // cannot start at all without a 32-character secret.
+    // cannot start at all without a readable keypair.
+    //
+    // RS256 SINCE MILESTONE 12. The trigger written down here in M2 arrived
+    // exactly as described: the gateway needed to verify tokens, and under
+    // HS256 that would have meant giving a public-facing process the ability
+    // to MINT admin tokens. Now:
+    //
+    //   privateKey  signs. This service, and nothing else in the system.
+    //   publicKey   verifies. Distributed freely; forges nothing.
+    //
+    // Note there is no HS256 fallback and no "algorithm from config". A
+    // verifier that accepts more than one algorithm is how `alg: none` and
+    // the RS256-to-HS256 confusion attack get in.
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService<AuthEnv, true>) => ({
-        secret: config.get('JWT_ACCESS_SECRET', { infer: true }),
+        privateKey: loadPemKey(
+          config.get('JWT_PRIVATE_KEY_PATH', { infer: true }),
+          'JWT private key',
+        ),
+        publicKey: loadPemKey(
+          config.get('JWT_PUBLIC_KEY_PATH', { infer: true }),
+          'JWT public key',
+        ),
         signOptions: {
-          // HS256: one shared secret both signs and verifies. Correct while a
-          // single service does both.
-          //
-          // The moment another service needs to verify tokens itself, that
-          // service would need the signing key — and a key that can verify can
-          // also mint. At that point switch to RS256: Auth holds the private
-          // key, everyone else gets the public one. Noted here because it is a
-          // decision with a clear trigger, not a rewrite to fear.
-          algorithm: 'HS256',
-          issuer: 'ecommerce-auth',
+          algorithm: JWT_ALGORITHM,
+          issuer: JWT_ISSUER,
+          audience: JWT_AUDIENCE,
+          // The KEY ID, so a token says which key signed it. Nothing reads it
+          // yet — with one key there is nothing to choose between. It is
+          // stamped now because rotation means "publish the new public key,
+          // start signing with the new private key, keep accepting the old
+          // one until the last token expires", and a verifier can only do
+          // that if the tokens already say which key they used. Adding
+          // `kid` at rotation time is too late for every token already out.
+          keyid: 'dev-1',
         },
         verifyOptions: {
-          algorithms: ['HS256'],
-          issuer: 'ecommerce-auth',
+          algorithms: [JWT_ALGORITHM],
+          issuer: JWT_ISSUER,
+          audience: JWT_AUDIENCE,
         },
       }),
     }),
