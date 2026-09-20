@@ -1,5 +1,9 @@
 import { correlationHeaders } from '@ecommerce/observability';
-import { AuthResponseDto, UserProfileDto } from '@ecommerce/contracts';
+import {
+  AuthResponseDto,
+  AuthTokensDto,
+  UserProfileDto,
+} from '@ecommerce/contracts';
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
 import { UpstreamProxy } from '../common/upstream-proxy';
@@ -44,6 +48,24 @@ export class AuthProxyService extends UpstreamProxy {
       method: 'POST',
       url: '/auth/login',
       data: body,
+    });
+  }
+
+  refresh(body: unknown): Promise<AuthTokensDto> {
+    return this.forward<AuthTokensDto>({
+      method: 'POST',
+      url: '/auth/refresh',
+      data: body,
+      headers: correlationHeaders(),
+    });
+  }
+
+  logout(body: unknown): Promise<void> {
+    return this.forward<void>({
+      method: 'POST',
+      url: '/auth/logout',
+      data: body,
+      headers: correlationHeaders(),
     });
   }
 

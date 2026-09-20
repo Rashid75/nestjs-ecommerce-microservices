@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 12 — Production Hardening (passes 1–2).**
+> **Current status: Milestone 12 — Production Hardening (passes 1–3).**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -18,7 +18,9 @@ explains why it exists before it is added.
 > a customer nothing an attacker could use. Tokens are **RS256**, so the
 > gateway can verify one without being able to mint one — which is what
 > finally closed the unauthenticated catalogue and inventory writes that had
-> stood open since M3.
+> stood open since M3. Sessions are **revocable**: a 30-day refresh token,
+> rotated on every use, that revokes the entire session if an already-used
+> one is ever replayed.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -715,9 +717,29 @@ as `degraded` rather than down in services that still work without it.
 
 | Method | Path                 | Auth   | Returns                   |
 | ------ | -------------------- | ------ | ------------------------- |
-| `POST` | `/api/auth/register` | —      | 201 · user + access token |
-| `POST` | `/api/auth/login`    | —      | 200 · user + access token |
+| `POST` | `/api/auth/register` | —      | 201 · user + token pair   |
+| `POST` | `/api/auth/login`    | —      | 200 · user + token pair   |
+| `POST` | `/api/auth/refresh`  | —      | 200 · a NEW token pair    |
+| `POST` | `/api/auth/logout`   | —      | 204 · always              |
 | `GET`  | `/api/auth/me`       | Bearer | 200 · user profile        |
+
+**Two tokens, two jobs.** The `accessToken` is a ~15-minute JWT, checked by
+signature and sent on every request — short because nothing can revoke it.
+The `refreshToken` is an opaque ~30-day string checked against a database
+row, sent only to `/auth/refresh` — long because it *is* revocable.
+
+`/auth/refresh` and `/auth/logout` take the refresh token **in the body**,
+not the `Authorization` header: it is the subject of the request rather than
+a credential for it, and mixing the two invites middleware to treat a 30-day
+credential like a 15-minute one. Neither requires an access token — you call
+refresh precisely because yours expired.
+
+**Rotation and reuse detection.** Every refresh retires the token presented.
+Replaying a retired one means two parties hold it, so the whole session is
+revoked and both go back to the password. Blunt on purpose.
+
+Logout cannot recall an access token already issued. The client must discard
+it; the residual window is 15 minutes.
 
 ### Catalogue
 
@@ -990,7 +1012,8 @@ boot if any are missing or malformed.
 | `AUTH_DB_SSL`            | auth    | `false`       | Must be true off-loopback                |
 | `JWT_PRIVATE_KEY_PATH`   | auth    | _required_    | RS256 private key. SIGNS. Auth only      |
 | `JWT_PUBLIC_KEY_PATH`    | auth, gateway | _required_ | RS256 public key. VERIFIES. Not a secret |
-| `JWT_ACCESS_TTL_SECONDS` | auth    | `900`         | Access token lifetime                    |
+| `JWT_ACCESS_TTL_SECONDS` | auth    | `900`         | Access token lifetime. Short: unrevocable |
+| `REFRESH_TOKEN_TTL_SECONDS` | auth  | `2592000`     | Refresh token lifetime (30d). Max 90d    |
 | `BCRYPT_COST`            | auth    | `12`          | bcrypt work factor (10–15)               |
 | `PRODUCT_SERVICE_PORT`   | product | `3002`        | Internal listening port                  |
 | `PRODUCT_DB_*`           | product | _required_    | Host, port, username, password, database |
@@ -1137,10 +1160,14 @@ Stated plainly, tracked with triggers in
     transcript. Rotate before any shared environment. The RS256 keypair in
     `keys/` is generated locally and git-ignored; generate a fresh one for
     any shared environment and keep the private half in a secret manager.
-12. **Access tokens cannot be revoked** before they expire. The 30-second
-    introspection cache bounds how long a disabled account keeps working;
-    nothing kills a single stolen token. Refresh tokens and a deny-list are
-    the next pass.
+12. **A specific ACCESS token cannot be killed.** Sessions became revocable
+    in pass 3, but an access token already issued stays valid for up to 15
+    minutes after logout or reuse detection. Needs a deny-list keyed on a
+    `jti` claim.
+13. **A session never ends on its own.** Each rotation extends the refresh
+    token by another 30 days, so there is no absolute cap on session length.
+14. **Expired refresh tokens are never deleted.** The table only grows. It
+    needs a cleanup job; the index on `expires_at` is there for it.
 
 ---
 

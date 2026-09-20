@@ -34,9 +34,24 @@ export class UserProfileDto {
  * when it dies. Clients that parse tokens to make decisions end up depending
  * on the token's internal format, which is supposed to be our business.
  *
- * There is no refresh token yet. Milestone 2 issues short-lived ACCESS tokens
- * only; refresh tokens bring rotation, reuse detection and a revocation store,
- * which is a whole subject of its own.
+ * TWO TOKENS SINCE MILESTONE 12, with deliberately different properties:
+ *
+ *   accessToken   ~15 minutes. STATELESS — checked by signature alone, sent
+ *                 on every request, and UNREVOCABLE. It is short precisely
+ *                 because nothing can stop it early.
+ *   refreshToken  ~30 days. STATEFUL — checked against a database row, used
+ *                 a few times a day, and revocable by writing that row. It
+ *                 is opaque: a random string with no claims inside it,
+ *                 because everything about it is looked up anyway.
+ *
+ * The pairing is the point. Long sessions without long-lived unrevocable
+ * credentials, and the expensive check happens a few times a day rather than
+ * on every request.
+ *
+ * STORE THE REFRESH TOKEN LIKE A PASSWORD. It is one: anything holding it can
+ * mint access tokens for thirty days. In a browser that means an httpOnly,
+ * Secure, SameSite cookie rather than `localStorage`, which any injected
+ * script can read.
  */
 export class AuthTokensDto {
   accessToken!: string;
@@ -44,6 +59,11 @@ export class AuthTokensDto {
   tokenType!: string;
 
   expiresIn!: number;
+
+  refreshToken!: string;
+
+  /** Seconds until the refresh token expires, so a client need not guess. */
+  refreshExpiresIn!: number;
 }
 
 /** What both `POST /auth/register` and `POST /auth/login` return. */

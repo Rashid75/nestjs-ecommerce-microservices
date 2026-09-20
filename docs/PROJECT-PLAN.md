@@ -10,11 +10,11 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 11 of 15, plus Milestone 12 passes 1–2                                |
+| **Milestones complete** | 11 of 15, plus Milestone 12 passes 1–3                                |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry                     |
 | **Databases**           | one per service, seven in total                                       |
-| **Next milestone**      | 12 pass 3 — refresh tokens and the DLQ parking queue                   |
+| **Next milestone**      | 12 pass 4 — the DLQ parking queue and replay path                      |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
@@ -826,7 +826,7 @@ and loads none of it.
 
 ## 🟡 Milestone 12 — Production Hardening
 
-**Passes 1 and 2 complete. Pass 3 next** — see _Planned, pass 3_ below.
+**Passes 1–3 complete. Pass 4 next** — see _Planned, pass 4_ below.
 Simple first, then the complexity, inside the same milestone (working
 agreement, rule 8).
 
@@ -1056,10 +1056,98 @@ curl -i -X POST http://localhost:3000/api/categories -H "Content-Type: applicati
 401 with no token. With a **customer** token: 403. With an **admin** token:
 201. Before this pass, all three returned 201.
 
-### Planned — pass 3
+### Delivered — pass 3
 
-Refresh tokens (revocable, server-side, with rotation and reuse detection),
-`POST /auth/logout`, and the DLQ parking queue with a replay path.
+Refresh tokens, and with them the answer to a question this system has been
+dodging since M2: **how do you have long sessions without long-lived
+credentials you cannot take back?**
+
+| | access token | refresh token |
+| --- | --- | --- |
+| Lifetime | ~15 minutes | ~30 days |
+| Checked by | signature alone | a row in `refresh_tokens` |
+| Sent | every request | a few times a day |
+| Format | JWT, with claims | **opaque** — 256 random bits |
+| Revocable | **no** | yes, by writing one row |
+
+The stateless access token is short *because* nothing can stop it early. The
+refresh token is allowed to be long *because* it is stateful. Neither
+property is a compromise; they are the reason there are two tokens.
+
+**The refresh token is opaque, not a JWT.** A JWT is the reflex and it is
+wrong here: the claims get read from the database anyway, the signature
+proves nothing the row does not, and the self-contained format leaks whatever
+is inside it to anyone with a base64 decoder. What it costs is real — people
+see a JWT and assume it can be trusted standalone.
+
+**Only a SHA-256 hash is stored**, never the token. This table is a list of
+live credentials; a leaked backup, a support query or a compromised read
+replica would otherwise let someone impersonate every user with an active
+session for thirty days without touching a password. SHA-256 rather than
+bcrypt is deliberate: the input is CSPRNG output, so there is no dictionary
+to slow down, and a salted hash could not be looked up without scanning.
+
+**Rotation.** Every use retires the token presented and issues a new one. A
+long-lived token used over and over means a stolen copy works for thirty days
+and nothing ever notices. With rotation, the thief's use and the customer's
+use *collide* — and a collision is a signal.
+
+**Reuse detection** turns that signal into a defence. Presenting an
+already-rotated token means two parties hold it, and nothing distinguishes
+which is the customer. So the whole **family** — every token descended from
+that login — is revoked, and both parties go back to the password. Refusing
+only the replayed token would leave whichever party rotated last holding a
+live session, and in the bad case that is the attacker.
+
+It is deliberately blunt. Logging a real customer out because their phone
+retried on a flaky connection is a bad afternoon; leaving an attacker with a
+thirty-day session is a bad year.
+
+**The concurrency race, closed the same way every status transition in this
+project is.** Two requests arriving with the same valid token — a client
+retrying a timed-out call, or a thief racing the victim — must not both
+succeed, or the session silently forks into two live branches. The repository
+does a compare-and-set (`UPDATE … WHERE revoked_at IS NULL`) and reports
+whether *this* call was the one that retired it. Exactly one wins; the loser
+is treated as reuse, because from there it is indistinguishable from it.
+
+**Every failure answers the same 401 with the same message.** "Expired"
+versus "revoked" versus "never existed" is precisely the feedback someone
+working through a stolen list wants. `POST /auth/logout` returns 204 even for
+a token that never existed, for the same reason.
+
+**A refresh re-reads the account.** A token issued thirty days ago says
+nothing about whether the account still exists or is still enabled. A refresh
+is the right moment to ask — it is the cheap, infrequent call, unlike the
+access token's per-request path.
+
+### What logout still cannot do
+
+The access token issued minutes ago stays valid until it expires. Nothing
+recalls it; the client must discard it. The residual window is the
+access-token lifetime, which is exactly why that lifetime is 15 minutes and
+not a day. Killing a specific access token needs a deny-list, and that is
+recorded as deferred rather than quietly implied to work.
+
+### Verify
+
+The migration is yours to run:
+
+```bash
+npx nx run auth:migrate
+```
+
+Then, in Postman folder `1 · Auth`: **Login** → **Refresh** (200, and note the
+token in the response is different) → **Refresh again — the OLD token** (401)
+→ **Refresh** (401 now too — the family is gone). Log in again to continue.
+
+### Planned — pass 4
+
+The DLQ parking queue: messages that fail repeatedly move to a dead-letter
+exchange and a parking queue with a replay path, instead of being nacked
+forever. It needs each queue re-declared with new arguments — an existing
+queue's arguments cannot be changed — which makes it an operational step on
+a running broker, and that is why it is its own pass.
 
 ---
 
@@ -1154,10 +1242,14 @@ exists so that "not yet" never quietly becomes "never".
    attack. Per-account lockout and MFA are still absent.
 5. **No audit logging** of authentication or catalogue mutations. An ADMIN
    deleting a product is now authorised and still unrecorded.
-6. **Access tokens cannot be revoked** before they expire. The gateway's
-   30-second introspection cache bounds how long a disabled account keeps
-   working; nothing kills a single stolen token. Refresh tokens and a
-   deny-list are pass 3.
+6. **A specific ACCESS token cannot be killed.** Sessions are now revocable
+   — logout and reuse detection end them — but the access token already
+   issued stays valid for up to 15 minutes. A deny-list keyed on a `jti`
+   claim is the fix; the trigger is the first time someone has to respond to
+   a confirmed token theft rather than a suspected one.
+   Also still absent: an absolute cap on session length. Each rotation
+   extends the refresh token by another 30 days, so an active session never
+   ends on its own.
 7. **`.env` secrets are development values** that have appeared in a terminal
    transcript. Rotate before any shared environment. The signing keypair is
    generated locally and git-ignored; regenerate it for any shared

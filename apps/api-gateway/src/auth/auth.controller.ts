@@ -1,6 +1,8 @@
 import {
   AuthResponseDto,
+  AuthTokensDto,
   LoginDto,
+  RefreshTokenDto,
   RegisterDto,
   UserProfileDto,
 } from '@ecommerce/contracts';
@@ -72,9 +74,47 @@ export class AuthController {
   }
 
   /**
-   * `@Headers('authorization')` rather than a guard: the gateway holds no
-   * signing key in this milestone, so it has nothing to verify with. It
-   * forwards the header and reports whatever the Auth Service decides.
+   * Exchange a refresh token for a new pair.
+   *
+   * RATE LIMITED, and more tightly than it looks like it needs to be. A
+   * healthy client calls this roughly once every fifteen minutes; anything
+   * calling it repeatedly is either a broken retry loop or someone working
+   * through a list of stolen tokens. 20 per 15 minutes leaves enormous room
+   * for the first and none for the second.
+   *
+   * It is also the one public endpoint where a single successful guess is
+   * worth thirty days of access, which is why it gets its own budget rather
+   * than sharing the default.
+   */
+  @Post('refresh')
+  @RateLimit({ limit: 20, windowSeconds: 900, name: 'auth:refresh' })
+  @HttpCode(HttpStatus.OK)
+  refresh(@Body() dto: RefreshTokenDto): Promise<AuthTokensDto> {
+    return this.proxy.refresh(dto);
+  }
+
+  /**
+   * End the session.
+   *
+   * No authentication required beyond the refresh token itself — the token
+   * IS the thing being revoked, and demanding a valid access token to log
+   * out would mean an expired session cannot be ended. Nothing is at risk:
+   * the worst an attacker can do with this endpoint is log someone out using
+   * a token they already possess.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  logout(@Body() dto: RefreshTokenDto): Promise<void> {
+    return this.proxy.logout(dto);
+  }
+
+  /**
+   * `@Headers('authorization')` rather than a guard.
+   *
+   * This endpoint is the gateway's own INTROSPECTION target — the guard
+   * calls it — so guarding it with the guard would be a loop. It forwards
+   * the header and reports whatever the Auth Service decides, which is the
+   * one verdict that counts.
    */
   @Get('me')
   me(

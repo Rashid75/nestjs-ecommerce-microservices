@@ -52,6 +52,7 @@ export interface AuthEnv {
   JWT_PRIVATE_KEY_PATH: string;
   JWT_PUBLIC_KEY_PATH: string;
   JWT_ACCESS_TTL_SECONDS: number;
+  REFRESH_TOKEN_TTL_SECONDS: number;
   BCRYPT_COST: number;
   RABBITMQ_URL: string;
   RABBITMQ_EXCHANGE: string;
@@ -112,6 +113,19 @@ export const authEnvSchema = Joi.object({
   // expires — there is no server-side session to delete. The lifetime is the
   // blast radius of a stolen token.
   JWT_ACCESS_TTL_SECONDS: Joi.number().integer().min(60).max(3600).default(900),
+
+  // 30 days. Long, and it is only safe to be long because this token is
+  // STATEFUL: it is checked against a row that can be revoked, unlike the
+  // access token, which is checked by signature and cannot.
+  //
+  // The upper bound is 90 days rather than unlimited. A session that never
+  // ends is not a feature — it is a credential you have lost track of, and
+  // every hour of it is an hour a stolen device stays logged in.
+  REFRESH_TOKEN_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(3600)
+    .max(7_776_000)
+    .default(2_592_000),
 
   // Lower bound 10: below that bcrypt is fast enough to be a poor deterrent.
   // Upper bound 15: bcrypt cost is exponential, and a slow enough hash turns

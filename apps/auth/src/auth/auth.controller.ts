@@ -1,6 +1,8 @@
 import {
   AuthResponseDto,
+  AuthTokensDto,
   LoginDto,
+  RefreshTokenDto,
   RegisterDto,
   UserProfileDto,
 } from '@ecommerce/contracts';
@@ -48,6 +50,42 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto): Promise<AuthResponseDto> {
     return this.auth.login(dto);
+  }
+
+  /**
+   * Exchanges a refresh token for a new pair.
+   *
+   * NO ACCESS TOKEN IS REQUIRED, and that is the entire purpose: a client
+   * calls this precisely because its access token has expired. Requiring a
+   * valid access token to refresh one would be a circle.
+   *
+   * The refresh token is therefore the only credential presented, which is
+   * why it is checked against the database rather than merely verified.
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  refresh(@Body() dto: RefreshTokenDto): Promise<AuthTokensDto> {
+    return this.auth.refresh(dto.refreshToken);
+  }
+
+  /**
+   * Ends the session the token belongs to.
+   *
+   * 204, and it answers 204 even for a token that was never valid. A logout
+   * endpoint that distinguished "revoked your session" from "no such token"
+   * would be an oracle for testing stolen tokens, and there is nothing a
+   * client can usefully do with the difference — either way, the session is
+   * over as far as it is concerned.
+   *
+   * NOTE WHAT LOGOUT CANNOT DO: the access token issued minutes ago stays
+   * valid until it expires. Nothing here can recall it. A client must also
+   * discard it, and the residual window is the access-token lifetime — which
+   * is the reason that lifetime is 15 minutes and not a day.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  logout(@Body() dto: RefreshTokenDto): Promise<void> {
+    return this.auth.logout(dto.refreshToken);
   }
 
   /**

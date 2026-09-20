@@ -22,6 +22,7 @@ export * from './lib/auth/register.dto';
 export * from './lib/auth/login.dto';
 export * from './lib/auth/auth-response.dto';
 export * from './lib/auth/jwt-keys';
+export * from './lib/auth/refresh.dto';
 
 // --- catalog ---
 export * from './lib/catalog/product-status.enum';

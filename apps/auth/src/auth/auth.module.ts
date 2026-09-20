@@ -15,6 +15,7 @@ import {
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import type { AuthEnv } from '../config/env.validation';
+import { TokensModule } from '../tokens/tokens.module';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -60,6 +61,7 @@ import { JwtStrategy } from './jwt.strategy';
     ]),
 
     UsersModule,
+    TokensModule,
 
     // Makes Passport's guards available. `defaultStrategy` is intentionally
     // NOT set: a default means `@UseGuards(AuthGuard())` silently picks a

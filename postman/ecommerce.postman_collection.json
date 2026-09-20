@@ -166,7 +166,8 @@
                 "exec": [
                   "const b = pm.response.json();",
                   "pm.environment.set('accessToken', b.tokens.accessToken);",
-                  "pm.environment.set('userId', b.user.id);"
+                  "pm.environment.set('userId', b.user.id);",
+                  "pm.environment.set('refreshToken', pm.response.json().tokens.refreshToken);"
                 ]
               }
             }
@@ -210,7 +211,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('accessToken', pm.response.json().tokens.accessToken);"
+                  "pm.environment.set('accessToken', pm.response.json().tokens.accessToken);",
+                  "pm.environment.set('refreshToken', pm.response.json().tokens.refreshToken);"
                 ]
               }
             }
@@ -278,7 +280,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('adminAccessToken', pm.response.json().tokens.accessToken);"
+                  "pm.environment.set('adminAccessToken', pm.response.json().tokens.accessToken);",
+                  "pm.environment.set('refreshToken', pm.response.json().tokens.refreshToken);"
                 ]
               }
             }
@@ -349,6 +352,121 @@
               ]
             },
             "description": "Expect **403 Forbidden**, using the ordinary customer token.\n\n403, not 401, and the difference is not pedantry:\n\n    401 Unauthorized  \"I do not know who you are.\"   Log in and retry.\n    403 Forbidden     \"I know who you are. No.\"       Retrying is pointless.\n\nSend it with NO Authorization header at all and you get 401 instead — try it, the two paths are answered by two different guards.\n\nBefore Milestone 12 this request returned **201** and created the category. Anyone who could reach the gateway could edit the catalogue."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/refresh",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Exchange the refresh token for a NEW pair. 200.\n\nNo access token is needed — you call this precisely because yours expired, and requiring a valid one to refresh would be a circle.\n\nNotice the response carries a DIFFERENT `refreshToken`. That is ROTATION: every use retires the token presented. Run this twice in a row and the second call succeeds, because the script below saves the new one each time.\n\nTwo tokens, two jobs:\n\n    accessToken   ~15 min, stateless, sent on every request, UNREVOCABLE\n    refreshToken  ~30 days, checked against a database row, REVOCABLE\n\nThat pairing is what buys long sessions without long-lived unrevocable credentials."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Rotation: the response carries a new token, and the old one is now dead.",
+                  "pm.environment.set('previousRefreshToken', pm.environment.get('refreshToken'));",
+                  "pm.environment.set('refreshToken', pm.response.json().refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh again — the OLD token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{previousRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/refresh",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Replays the token the previous request just retired. Expect **401**.\n\nTHIS IS THE INTERESTING ONE. It is not merely refused — presenting an already-rotated token means two parties hold it, and there is no way to tell which one is the customer. So the whole FAMILY is revoked: every token descended from that login, including the one you are currently holding.\n\nProve it: run this, then run **Refresh** again. It now fails too. You have to log in with the password again.\n\nDeliberately blunt. Logging a real customer out because their phone retried on a flaky connection is a bad afternoon; leaving an attacker with a thirty-day session is a bad year."
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/{{apiPrefix}}/auth/logout",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "{{apiPrefix}}",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Ends the session. **204**, always — even for a token that was never valid, because an endpoint that distinguished the two would be an oracle for testing stolen tokens.\n\nIt revokes the whole family, not just the token you sent: \"log me out\" means the session, not the one string the client happens to be holding.\n\nWHAT LOGOUT CANNOT DO: the access token issued minutes ago stays valid until it expires. Nothing can recall it. The client must discard it, and the residual window is the access-token lifetime — which is exactly why that lifetime is 15 minutes and not a day."
           },
           "response": []
         }

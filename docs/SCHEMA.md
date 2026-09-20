@@ -1,6 +1,6 @@
 # Database Schema
 
-Every table in the system as of **Milestone 10**, taken from the
+Every table in the system as of **Milestone 12**, taken from the
 migrations — the migrations are the source of truth, not this file.
 
 **Seven databases, one per service.** No service holds credentials for
@@ -8,7 +8,7 @@ another's database, so "no service reads another service's tables" is a fact
 about the deployment rather than a promise about the code.
 
 ```text
-ecommerce_auth_db        users
+ecommerce_auth_db        users · refresh_tokens
 ecommerce_product_db     categories · products
 ecommerce_inventory_db   inventory_items · stock_movements
 ecommerce_cart_db        carts · cart_items
@@ -35,6 +35,18 @@ erDiagram
         varchar_100 last_name
         varchar_20 role "CUSTOMER | ADMIN"
         boolean is_active
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    refresh_tokens {
+        uuid id PK
+        uuid user_id FK "CASCADE on delete"
+        char_64 token_hash UK "SHA-256; the token is not stored"
+        uuid family_id "the session"
+        timestamptz expires_at
+        timestamptz revoked_at "NULL = live"
+        uuid replaced_by "rotation chain"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -191,6 +203,7 @@ erDiagram
     carts ||--o{ cart_items : "contains"
     orders ||--o{ order_items : "contains"
 
+    users ||--o{ refresh_tokens : "real FK, same database"
     users ||..o{ carts : "user_id, no FK"
     users ||..o{ orders : "user_id, no FK"
     products ||..o| inventory_items : "product_id, no FK"
@@ -224,6 +237,50 @@ users
 
 The hash lives behind a Sequelize `defaultScope` that excludes it, so a query
 has to ask for it by name (`withPasswordHash`) to see it at all.
+
+```text
+refresh_tokens                     (Milestone 12)
+  id                uuid          PK
+  user_id           uuid          FK → users.id, ON DELETE CASCADE
+  token_hash        char(64)      UNIQUE · SHA-256 hex. The token is NOT stored
+  family_id         uuid          the SESSION; rotation keeps it, reuse kills it
+  expires_at        timestamptz
+  revoked_at        timestamptz   NULL = live
+  replaced_by       uuid          the token that superseded this one
+  created_at        timestamptz
+  updated_at        timestamptz
+
+  indexes: token_hash (unique) · family_id · user_id · expires_at
+```
+
+THE TWO COLUMNS WORTH UNDERSTANDING.
+
+`token_hash`, because this table is a list of live credentials. Store the
+tokens themselves and a leaked backup — or a support query, or a compromised
+read replica — lets someone impersonate every user with an active session for
+thirty days, without touching a password. SHA-256 rather than bcrypt is
+deliberate: the input is 256 bits of CSPRNG output, so there is no dictionary
+to slow down, and a salted hash could not be looked up without scanning the
+table.
+
+`family_id`, because rotation alone is not a defence. Every use of a refresh
+token retires it and issues a new one carrying the same `family_id`. If an
+already-retired token is presented, two parties hold it — and since there is
+no way to tell which one is the customer, the whole family is revoked and both
+go back to the password.
+
+`revoked_at` is a nullable timestamp rather than a boolean because "when"
+answers every question "whether" answers, and an incident is a question about
+when.
+
+This is also the table that makes the two token types make sense:
+
+| | access token | refresh token |
+| --- | --- | --- |
+| Lifetime | ~15 minutes | ~30 days |
+| Checked by | signature alone | **this table** |
+| Sent | every request | a few times a day |
+| Revocable | **no** | yes — one row |
 
 ### `ecommerce_product_db`
 
@@ -490,8 +547,12 @@ to enforce RESTRICT.
 
 ## Still to come
 
-Milestone 11 is observability, which adds no tables — it adds a
-**correlation id** to every event and every request, so one customer's
-journey can be followed across eight services. Events already carry an
-`eventId`; that answers "have I seen this message?" and says nothing about
-which request caused it.
+Milestones 11 and 12 added exactly one table between them — `refresh_tokens`
+above. Observability added none: a correlation id travels on requests and
+events, not in a table, and health checks and the exception filter are
+behaviour rather than data.
+
+Nothing scheduled adds a table either. The DLQ parking queue (pass 4) lives
+in the broker, not in PostgreSQL, which is the point of it — a message that
+cannot be processed should not become a row somebody has to remember to look
+at.
