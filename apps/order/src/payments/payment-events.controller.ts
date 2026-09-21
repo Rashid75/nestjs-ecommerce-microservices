@@ -1,11 +1,12 @@
 import { runWithCorrelationId } from '@ecommerce/observability';
 import {
+  ackOrPark,
   EventPattern as Events,
   type PaymentFailedPayload,
   type PaymentSucceededPayload,
 } from '@ecommerce/contracts';
 import { Controller, Logger } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { Ctx, EventPattern, Payload, RmqContext } from '@nestjs/microservices';
 import { OrdersRepository } from '../orders/orders.repository';
 
 /**
@@ -31,10 +32,13 @@ export class PaymentEventsController {
   @EventPattern(Events.PaymentSucceeded)
   async onPaymentSucceeded(
     @Payload() payment: PaymentSucceededPayload,
+    @Ctx() context: RmqContext,
   ): Promise<void> {
-    await runWithCorrelationId(payment.correlationId, () =>
-      this.markPaid(payment),
-    );
+    await ackOrPark(context, this.logger, 'payment.succeeded', async () => {
+      await runWithCorrelationId(payment.correlationId, () =>
+        this.markPaid(payment),
+      );
+    });
   }
 
   private async markPaid(payment: PaymentSucceededPayload): Promise<void> {
@@ -91,12 +95,15 @@ export class PaymentEventsController {
   @EventPattern(Events.PaymentFailed)
   async onPaymentFailed(
     @Payload() payment: PaymentFailedPayload,
+    @Ctx() context: RmqContext,
   ): Promise<void> {
-    await runWithCorrelationId(payment.correlationId, () => {
-      this.logger.warn(
-        `payment ${payment.reference}: ${payment.failureCode} on order ${payment.orderId} (retryable: ${payment.retryable}) — the order stays payable`,
-      );
-      return Promise.resolve();
+    await ackOrPark(context, this.logger, 'payment.failed', async () => {
+      await runWithCorrelationId(payment.correlationId, () => {
+        this.logger.warn(
+          `payment ${payment.reference}: ${payment.failureCode} on order ${payment.orderId} (retryable: ${payment.retryable}) — the order stays payable`,
+        );
+        return Promise.resolve();
+      });
     });
   }
 }

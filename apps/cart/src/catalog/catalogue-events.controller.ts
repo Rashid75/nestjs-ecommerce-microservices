@@ -1,11 +1,12 @@
 import { runWithCorrelationId } from '@ecommerce/observability';
 import {
+  ackOrPark,
   EventPattern as Events,
   ProductArchivedPayload,
   ProductPriceChangedPayload,
 } from '@ecommerce/contracts';
 import { Controller, Logger } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { Ctx, EventPattern, Payload, RmqContext } from '@nestjs/microservices';
 import { InjectModel } from '@nestjs/sequelize';
 import { CartItem } from '../cart/cart-item.model';
 
@@ -57,22 +58,25 @@ export class CatalogueEventsController {
   @EventPattern(Events.ProductPriceChanged)
   async onPriceChanged(
     @Payload() payload: ProductPriceChangedPayload,
+    @Ctx() context: RmqContext,
   ): Promise<void> {
-    // THE ID CROSSES THE BROKER IN THE PAYLOAD, and is put back into the
-    // async context here. Nothing carries it automatically: this handler
-    // runs in a different process, minutes later if the broker was down, and
-    // without this line its logs would belong to no story at all.
-    await runWithCorrelationId(payload.correlationId, async () => {
-      const [affected] = await this.items.update(
-        { cataloguePrice: payload.newPrice },
-        { where: { productId: payload.productId } },
-      );
-
-      if (affected > 0) {
-        this.logger.log(
-          `${payload.sku}: ${payload.previousPrice} → ${payload.newPrice}, flagged ${affected} cart line(s)`,
+    await ackOrPark(context, this.logger, 'product.price_changed', async () => {
+      // THE ID CROSSES THE BROKER IN THE PAYLOAD, and is put back into the
+      // async context here. Nothing carries it automatically: this handler
+      // runs in a different process, minutes later if the broker was down, and
+      // without this line its logs would belong to no story at all.
+      await runWithCorrelationId(payload.correlationId, async () => {
+        const [affected] = await this.items.update(
+          { cataloguePrice: payload.newPrice },
+          { where: { productId: payload.productId } },
         );
-      }
+
+        if (affected > 0) {
+          this.logger.log(
+            `${payload.sku}: ${payload.previousPrice} → ${payload.newPrice}, flagged ${affected} cart line(s)`,
+          );
+        }
+      });
     });
   }
 
@@ -83,18 +87,23 @@ export class CatalogueEventsController {
    * to a customer than showing it greyed out with a reason.
    */
   @EventPattern(Events.ProductArchived)
-  async onArchived(@Payload() payload: ProductArchivedPayload): Promise<void> {
-    await runWithCorrelationId(payload.correlationId, async () => {
-      const [affected] = await this.items.update(
-        { unavailableAt: new Date() },
-        { where: { productId: payload.productId } },
-      );
-
-      if (affected > 0) {
-        this.logger.log(
-          `${payload.sku}: archived, flagged ${affected} cart line(s) unavailable`,
+  async onArchived(
+    @Payload() payload: ProductArchivedPayload,
+    @Ctx() context: RmqContext,
+  ): Promise<void> {
+    await ackOrPark(context, this.logger, 'product.archived', async () => {
+      await runWithCorrelationId(payload.correlationId, async () => {
+        const [affected] = await this.items.update(
+          { unavailableAt: new Date() },
+          { where: { productId: payload.productId } },
         );
-      }
+
+        if (affected > 0) {
+          this.logger.log(
+            `${payload.sku}: archived, flagged ${affected} cart line(s) unavailable`,
+          );
+        }
+      });
     });
   }
 }

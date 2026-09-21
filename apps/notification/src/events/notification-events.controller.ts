@@ -1,12 +1,13 @@
 import { runWithCorrelationId } from '@ecommerce/observability';
 import {
+  ackOrPark,
   EventPattern as Events,
   type OrderConfirmedPayload,
   type PaymentSucceededPayload,
   type UserRegisteredPayload,
 } from '@ecommerce/contracts';
-import { Controller } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { Controller, Logger } from '@nestjs/common';
+import { Ctx, EventPattern, Payload, RmqContext } from '@nestjs/microservices';
 import { NotificationsService } from '../notifications/notifications.service';
 
 /**
@@ -33,6 +34,8 @@ import { NotificationsService } from '../notifications/notifications.service';
  */
 @Controller()
 export class NotificationEventsController {
+  private readonly logger = new Logger(NotificationEventsController.name);
+
   constructor(private readonly notifications: NotificationsService) {}
 
   /**
@@ -45,20 +48,26 @@ export class NotificationEventsController {
   @EventPattern(Events.UserRegistered)
   async onUserRegistered(
     @Payload() user: UserRegisteredPayload,
+    @Ctx() context: RmqContext,
   ): Promise<void> {
-    // Back into the customer's story, on the other side of the broker.
-    await runWithCorrelationId(user.correlationId, () =>
-      this.notifications.onUserRegistered(user),
-    );
+    await ackOrPark(context, this.logger, 'user.registered', async () => {
+      // Back into the customer's story, on the other side of the broker.
+      await runWithCorrelationId(user.correlationId, () =>
+        this.notifications.onUserRegistered(user),
+      );
+    });
   }
 
   @EventPattern(Events.OrderConfirmed)
   async onOrderConfirmed(
     @Payload() order: OrderConfirmedPayload,
+    @Ctx() context: RmqContext,
   ): Promise<void> {
-    await runWithCorrelationId(order.correlationId, () =>
-      this.notifications.onOrderConfirmed(order),
-    );
+    await ackOrPark(context, this.logger, 'order.confirmed', async () => {
+      await runWithCorrelationId(order.correlationId, () =>
+        this.notifications.onOrderConfirmed(order),
+      );
+    });
   }
 
   /**
@@ -73,9 +82,12 @@ export class NotificationEventsController {
   @EventPattern(Events.PaymentSucceeded)
   async onPaymentSucceeded(
     @Payload() payment: PaymentSucceededPayload,
+    @Ctx() context: RmqContext,
   ): Promise<void> {
-    await runWithCorrelationId(payment.correlationId, () =>
-      this.notifications.onPaymentSucceeded(payment),
-    );
+    await ackOrPark(context, this.logger, 'payment.succeeded', async () => {
+      await runWithCorrelationId(payment.correlationId, () =>
+        this.notifications.onPaymentSucceeded(payment),
+      );
+    });
   }
 }

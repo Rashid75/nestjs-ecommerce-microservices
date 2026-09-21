@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 12 — Production Hardening (passes 1–3).**
+> **Current status: Milestone 12 — Production Hardening, complete.**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -20,7 +20,8 @@ explains why it exists before it is added.
 > finally closed the unauthenticated catalogue and inventory writes that had
 > stood open since M3. Sessions are **revocable**: a 30-day refresh token,
 > rotated on every use, that revokes the entire session if an already-used
-> one is ever replayed.
+> one is ever replayed. And a message a consumer cannot process is **parked**
+> in a dead-letter queue with a replay path, rather than silently dropped.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -305,18 +306,35 @@ docker run -d --name ecommerce-redis -p 6379:6379 redis:7-alpine
 docker run -d --name ecommerce-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 ```
 
+Then declare the topology — exchanges, service queues with their
+dead-letter arguments, and the parking queues:
+
+```bash
+node tools/setup-broker.mjs
+```
+
+⚠️ **Upgrading an existing broker** (queues created before M12 pass 4) needs
+`--recreate`, which **deletes the three service queues and discards any
+messages in them**. A queue's arguments are fixed when it is declared, so a
+queue that already exists without `x-dead-letter-exchange` makes the service
+refuse to start with `PRECONDITION_FAILED`:
+
+```bash
+node tools/setup-broker.mjs --recreate
+```
+
 The RabbitMQ management UI is at <http://localhost:15672> (guest / guest) —
-the best way to see exchanges, bindings, queue depths and the dead-letter
-queue.
+the best way to see exchanges, bindings, queue depths and what is parked.
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in the two `*_DB_PASSWORD` values and generate a signing key:
+Fill in the `*_DB_PASSWORD` values, then generate the RS256 keypair (see
+[Signing keys](#signing-keys)):
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+node tools/generate-jwt-keys.mjs
 ```
 
 Create the databases (next section), then:
@@ -660,17 +678,70 @@ A binding outlives the code that asked for it: deleting a handler does not
 remove its binding, so messages pile up in that queue until someone unbinds
 it by hand.
 
-### What is deliberately not built yet
+### A message that cannot be processed is PARKED, not lost
 
-Retry, dead-letter queues, idempotency, a transactional outbox and an event
-envelope are all absent. Each solves a real problem, and each arrives in the
-milestone that meets that problem — the outbox and the event envelope in
-**step 2 of Milestone 8**, which exists precisely so the problem comes before
-the mechanism. See [the deferred table](docs/PROJECT-PLAN.md).
+Until M12 pass 4 a handler that threw lost its message: Nest's RMQ transport
+defaults to `noAck: true`, so the broker considers a message delivered the
+moment it is handed over.
 
-Today a failed handler loses its message and a duplicate delivery flags a
-cart line twice. Both are harmless for these events; neither would be once an
-event means an order.
+Three things you can do with a failure, and the middle one is a trap:
+
+| | What happens | Why not |
+| --- | --- | --- |
+| **Drop** (`noAck: true`) | message vanishes | the failure leaves nothing to act on |
+| **Requeue** (requeue=true) | back to the head of the queue | **poison-message loop** — redelivered instantly, fails again, consumer spins forever |
+| **Park** (requeue=false + DLX) | broker moves it to a parking queue | nothing spins, nothing is lost, and the parked count is alertable |
+
+```text
+ecommerce.events (topic)
+  ├── cart_service          ──fail──►  ecommerce.events.dlx (direct)
+  ├── order_service         ──fail──►        │
+  └── notification_service  ──fail──►        ├── cart_service.parked
+                                             ├── order_service.parked
+                                             └── notification_service.parked
+```
+
+The DLX is **direct** while the main exchange is topic: a published event
+does not know who is listening, but a parked one goes to exactly one place.
+Each queue also sets `x-dead-letter-routing-key` to its own name — without
+that rewrite the message keeps `order.confirmed`, nothing is bound to that
+on a direct exchange, and it is dropped silently.
+
+Handlers acknowledge manually through `ackOrPark`. With `noAck: false`
+Nest does nothing on the handler's behalf, and a handler that forgets leaves
+the message unacknowledged forever — not redelivered, not parked, quietly
+eating a slot of the prefetch budget until the consumer stops receiving
+anything at all.
+
+**Ack means "I am done with this", not "it succeeded."** A duplicate delivery
+whose conditional UPDATE matched no rows is finished. Only a handler that
+*threw* is parked.
+
+#### Replaying
+
+```bash
+node tools/replay-parked.mjs                        # what is parked?
+node tools/replay-parked.mjs --peek cart_service    # read without consuming
+node tools/replay-parked.mjs --replay cart_service  # put them back
+```
+
+Each message is republished **first**, with publisher confirms, and acked
+from the parking queue only once the broker confirms it holds the copy.
+Ack-then-publish loses the message on a crash in between — from the one queue
+whose whole job was not losing it.
+
+Replay before fixing the cause and it parks again. That is the loop working;
+replaying on a cron is requeueing with extra latency.
+
+### What is still deliberately not built
+
+**Retry with backoff.** A two-second database blip parks a message a second
+attempt would have handled. The refinement is a retry queue with a TTL that
+dead-letters back to the main queue. **Alerting** on the parked count is also
+absent — the number is visible at `:15672` and nobody is watching it.
+
+A transactional outbox and an event envelope remain absent too; see
+[the deferred table](docs/PROJECT-PLAN.md) for the trigger on each.
 
 ## API
 
@@ -1137,10 +1208,12 @@ Stated plainly, tracked with triggers in
    Related: `reserve`/`release`/`fulfil` are marked ADMIN, which is right
    while only an operator calls them and wrong once the Order Service does.
    Service identities are the proper answer.
-3. **Messaging has no retry, dead-letter queue or idempotency.** A failed
-   handler loses its message; a duplicate delivery flags a line twice. Both
-   are harmless for today's events and neither would be once an event means
-   an order.
+3. ~~**Messaging has no dead-letter queue.**~~ **CLOSED in M12 pass 4** — a
+   failed handler nacks without requeue and the broker parks the message in
+   `<service>.parked`, replayable with `tools/replay-parked.mjs`.
+   Still absent: **retry with backoff** (a two-second database blip parks a
+   message that a second attempt would have handled) and **alerting** on the
+   parked count — nobody is told when something parks.
 4. **The dual-write problem is unsolved.** A publish can fail after its
    database commit, losing the event with only a log line.
 5. **Rate limiting is per-IP only** and fails open when Redis is down. It

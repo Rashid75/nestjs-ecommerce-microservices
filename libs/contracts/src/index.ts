@@ -47,3 +47,4 @@ export * from './lib/notifications/notification.dto';
 
 // --- events ---
 export * from './lib/events/events';
+export * from './lib/events/dead-letter';

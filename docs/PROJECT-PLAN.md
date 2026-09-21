@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 11 of 15, plus Milestone 12 passes 1–3                                |
+| **Milestones complete** | 12 of 15                                                              |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry                     |
 | **Databases**           | one per service, seven in total                                       |
-| **Next milestone**      | 12 pass 4 — the DLQ parking queue and replay path                      |
+| **Next milestone**      | 13 — Testing                                                          |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ██ M11 ██ M12 ▓░ M13 ░░ M14 ░░ M15 ░░
+M9 ██ M10 ██ M11 ██ M12 ██ M13 ░░ M14 ░░ M15 ░░
 ```
 
 ---
@@ -824,9 +824,10 @@ and loads none of it.
 
 ---
 
-## 🟡 Milestone 12 — Production Hardening
+## ✅ Milestone 12 — Production Hardening
 
-**Passes 1–3 complete. Pass 4 next** — see _Planned, pass 4_ below.
+**Complete, in four passes.** Simple first, then the complexity, inside the
+same milestone (working agreement, rule 8).
 Simple first, then the complexity, inside the same milestone (working
 agreement, rule 8).
 
@@ -1141,13 +1142,112 @@ Then, in Postman folder `1 · Auth`: **Login** → **Refresh** (200, and note th
 token in the response is different) → **Refresh again — the OLD token** (401)
 → **Refresh** (401 now too — the family is gone). Log in again to continue.
 
-### Planned — pass 4
+### Delivered — pass 4
 
-The DLQ parking queue: messages that fail repeatedly move to a dead-letter
-exchange and a parking queue with a replay path, instead of being nacked
-forever. It needs each queue re-declared with new arguments — an existing
-queue's arguments cannot be changed — which makes it an operational step on
-a running broker, and that is why it is its own pass.
+The dead-letter path, and with it the end of known gap #3: _"a failed handler
+loses its message"_.
+
+Nest's RMQ transport defaults to `noAck: true` — the broker considers a
+message delivered the instant it is handed over. A handler that threw
+produced a log line and nothing else; the message was already gone. Fine for
+`product.price_changed`, where the next price change repairs it. Not fine for
+`order.confirmed`, where it means a paid order whose cart is never converted
+and whose customer is never emailed, with no artefact anyone can act on.
+
+**The three options, and why the middle one is a trap:**
+
+| | What happens | Why not |
+| --- | --- | --- |
+| **Drop** (`noAck: true`) | message vanishes | the failure leaves nothing to act on |
+| **Requeue** (`nack`, requeue=true) | back to the head of the queue | **poison-message loop** — redelivered instantly, fails again, consumer spins at full speed forever |
+| **Park** (`nack`, requeue=false + DLX) | broker moves it to a parking queue | nothing spins, nothing is lost, and "messages parked" is a number you can alert on |
+
+We park.
+
+**Topology.** The main exchange stays a **topic** — publishers do not know who
+is listening. The dead-letter exchange is **direct**, because a parked message
+goes to exactly one place: the parking queue of the service that failed it.
+Each service queue carries `x-dead-letter-exchange` and, critically,
+`x-dead-letter-routing-key` set to its own name — without the rewrite the
+message keeps its original key (`order.confirmed`), which nothing is bound to
+on a direct exchange, and it is **dropped silently**. Dead-lettering that
+loses messages is worse than none, because you believe you are covered.
+
+```text
+ecommerce.events (topic)
+  ├── cart_service          ──fail──►  ecommerce.events.dlx (direct)
+  ├── order_service         ──fail──►        │
+  └── notification_service  ──fail──►        ├── cart_service.parked
+                                             ├── order_service.parked
+                                             └── notification_service.parked
+```
+
+One parking queue per service, not one shared. A shared queue mixes the Cart
+Service's failures with the Notification Service's, and replaying it replays
+both.
+
+**Manual acknowledgement.** `noAck: false`, and Nest then does *nothing* on a
+handler's behalf — it neither acks on success nor nacks on failure. A handler
+that forgets leaves the message unacknowledged forever: not redelivered, not
+parked, silently consuming one slot of the prefetch budget. Enough of those
+and the consumer stops receiving anything at all, with no error anywhere.
+That failure is quiet, cumulative and very hard to diagnose, which is why
+acking lives in one shared `ackOrPark` rather than being written out eight
+times. `prefetchCount: 10` bounds the in-flight window, which matters far
+more with manual acks than without.
+
+**Ack means "I am done with this", not "it succeeded".** A duplicate delivery
+whose conditional UPDATE matched no rows is finished and must be acked. Only
+a handler that *threw* is parked. There is a test for exactly that, because
+it is the distinction people get wrong.
+
+**The replay path**, because a dead-letter queue without one is a landfill —
+it stops you losing messages and gives you nothing to do about them, so
+nobody looks and the parked count grows until it is ignored on principle.
+
+```bash
+node tools/replay-parked.mjs                        # what is parked?
+node tools/replay-parked.mjs --peek cart_service    # read without consuming
+node tools/replay-parked.mjs --replay cart_service  # put them back
+```
+
+The order of operations is the part that is easy to get wrong: each message
+is **republished first, with publisher confirms, and acked from the parking
+queue only after the broker confirms it holds the copy**. Ack-then-publish
+loses the message permanently on a crash in between — from the one queue
+whose entire job was not losing it.
+
+Replaying before the cause is fixed simply parks the message again. That is
+the loop working. What you must not do is replay on a cron, which turns
+parking into requeueing with extra latency.
+
+### Deliberately not built
+
+**Retry with backoff.** A transient failure — a two-second database blip —
+parks the message and needs a human to replay it. The refinement is a retry
+queue with a TTL that dead-letters back to the main queue, giving N delayed
+attempts before parking. It doubles the moving parts, and parking-plus-replay
+is already the difference between losing an order and delaying one. Trigger:
+the first time the parking queue fills with failures that would have
+succeeded on a second attempt.
+
+**Alerting.** Nobody is told when something parks. The count is visible at
+`:15672` and via the replay tool, and no one is watching either. Trigger: the
+first parked message discovered late.
+
+### Verify
+
+RabbitMQ has to be running. The first command is **destructive** — see below.
+
+```bash
+node tools/setup-broker.mjs --recreate
+```
+
+Then start the services and check the exchanges and queues at
+<http://localhost:15672>. To see a message actually park: stop PostgreSQL,
+place an order, and watch `cart_service.parked` go to 1 — the cart handler
+cannot reach its database, so the message is preserved instead of lost. Start
+PostgreSQL, run the replay, and the cart converts.
 
 ---
 

@@ -5,7 +5,7 @@
  */
 import './otel-service-name';
 import '@ecommerce/observability/tracing';
-import { ServiceQueue } from '@ecommerce/contracts';
+import { deadLetterArgs, ServiceQueue } from '@ecommerce/contracts';
 import {
   AllExceptionsFilter,
   correlationMiddleware,
@@ -101,7 +101,42 @@ async function bootstrap() {
       // Durable, so a broker restart does not discard the queue and the
       // bindings with it. Messages published while this service is down
       // wait here for it.
-      queueOptions: { durable: true },
+      queueOptions: {
+        durable: true,
+        // DEAD-LETTERING, since Milestone 12 pass 4. A message this service
+        // cannot process is moved by the BROKER to its parking queue rather
+        // than being dropped — see libs/contracts/src/lib/events/dead-letter.ts
+        // for why parking beats requeueing.
+        //
+        // These arguments are fixed at declaration. If this service refuses
+        // to start with PRECONDITION_FAILED, the queue already exists WITHOUT
+        // them and has to be deleted: node tools/setup-broker.mjs --recreate
+        arguments: deadLetterArgs(ServiceQueue.Order),
+      },
+
+      /**
+       * MANUAL ACKNOWLEDGEMENT. Nest's default is `noAck: true`, where the
+       * broker considers a message delivered the moment it is handed over —
+       * so a handler that throws loses it silently.
+       *
+       * With this false, nothing is acknowledged until a handler says so,
+       * which is what makes parking possible. It also means every handler
+       * MUST settle its message: see `ackOrPark`, which is why no handler
+       * calls `channel.ack` directly.
+       */
+      noAck: false,
+
+      /**
+       * At most this many unacknowledged messages at once.
+       *
+       * It matters far more with manual acks than without. Unlimited
+       * prefetch plus manual acks means one slow handler can accumulate
+       * thousands of in-flight messages in memory, and a crash loses all of
+       * them from this process's point of view (the broker redelivers, which
+       * is the good news). A small window also spreads work across replicas
+       * instead of letting the first consumer to connect grab everything.
+       */
+      prefetchCount: 10,
     },
   });
 
