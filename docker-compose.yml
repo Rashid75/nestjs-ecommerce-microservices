@@ -1,0 +1,303 @@
+# The whole system, on one command.
+#
+#   docker compose up -d --build     everything
+#   docker compose run --rm migrator run the migrations
+#   docker compose logs -f order     one service's logs
+#   docker compose down              stop, keep the data
+#   docker compose down -v           stop and DELETE the databases
+#
+# ─── WHAT THIS REPLACES ────────────────────────────────────────────────────
+#
+# Eleven terminals: Postgres, Redis, RabbitMQ, MailHog and eight services,
+# plus the seven `CREATE DATABASE` statements and the orphaned Node processes
+# that outlive `nx serve`. Milestone 14 exists because "how do I run this?"
+# had a three-page answer.
+#
+# ─── WHAT IT IS NOT ────────────────────────────────────────────────────────
+#
+# This is a DEVELOPMENT stack. It runs everything on one host with no
+# replication, no TLS between services, no secret manager, and guest
+# credentials on the broker. A production deployment shares the images and
+# almost nothing else — that is Kubernetes or ECS, and it is out of scope.
+#
+# ─── PORTS ─────────────────────────────────────────────────────────────────
+#
+# Postgres is published on 5433, NOT 5432. A developer machine usually has a
+# local Postgres already; publishing on 5432 either fails to bind or, worse,
+# silently connects your tools to the wrong database. Inside the compose
+# network the services still use 5432 — the mapping only affects the host.
+
+name: ecommerce
+
+x-service-base: &service-base
+  build:
+    context: .
+    # Every service is the same Dockerfile with a different APP.
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  # `env_file` supplies everything that does not change between running on
+  # the host and running in a container — token lifetimes, bcrypt cost, log
+  # level. Anything that IS different (hostnames) is overridden per service
+  # below, because in compose `environment` wins over `env_file`.
+  env_file: .env
+  networks: [ecommerce]
+  depends_on:
+    postgres: { condition: service_healthy }
+    rabbitmq: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+x-db-host: &db-host
+  # In a container, 127.0.0.1 is the CONTAINER, so a service bound to it is
+  # unreachable from the gateway next door. The boundary moves from the
+  # loopback interface to the network namespace: only api-gateway publishes
+  # a port, so the other seven are reachable inside this network and nowhere
+  # else.
+  BIND_HOST: 0.0.0.0
+  # Every service talks to the container, never to localhost. This is the
+  # single most common compose mistake: inside a container, `localhost` is
+  # that container, so a service pointed at localhost:5432 reaches nothing at
+  # all rather than reaching Postgres.
+  AUTH_DB_HOST: postgres
+  PRODUCT_DB_HOST: postgres
+  INVENTORY_DB_HOST: postgres
+  CART_DB_HOST: postgres
+  ORDER_DB_HOST: postgres
+  PAYMENT_DB_HOST: postgres
+  NOTIFICATION_DB_HOST: postgres
+  REDIS_URL: redis://redis:6379
+  RABBITMQ_URL: amqp://rabbitmq:5672
+
+services:
+  # ──────────────────────────────────────────────────── infrastructure ──
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres}
+      # The seven service passwords, passed through for the init script.
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      PRODUCT_DB_PASSWORD: ${PRODUCT_DB_PASSWORD}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD}
+      CART_DB_PASSWORD: ${CART_DB_PASSWORD}
+      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs ONCE, on an empty data directory. Editing it later does nothing
+      # until the volume is deleted.
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-databases.sh:ro
+    healthcheck:
+      # `pg_isready` answers "is the server accepting connections", which is
+      # exactly what `depends_on: service_healthy` needs to know. Without a
+      # health check, compose only waits for the container to START, and a
+      # Postgres container is up for several seconds before it can be talked
+      # to — so every service would crash on boot, restart, and eventually
+      # work. That is not a stack that starts; it is one that recovers.
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [ecommerce]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # `--save ""` disables the RDB snapshot. This is a CACHE: everything in
+    # it can be rebuilt from PostgreSQL, so paying for disk writes — and
+    # restoring stale values after a restart — buys nothing.
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [ecommerce]
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    volumes:
+      # Durable queues and their messages survive a restart only if the data
+      # directory does. Without this volume, `docker compose restart` quietly
+      # discards every parked message — which is the one thing the
+      # dead-letter queue exists to prevent.
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [ecommerce]
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    restart: unless-stopped
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+    networks: [ecommerce]
+
+  # ─────────────────────────────────────────────────────────── services ──
+  api-gateway:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: api-gateway }
+    environment:
+      <<: *db-host
+      PORT: 3000
+      # Service-to-service URLs use the COMPOSE SERVICE NAME as the
+      # hostname. Docker's embedded DNS resolves it to whichever IP that
+      # container currently has, which is why nothing here is an address.
+      AUTH_SERVICE_URL: http://auth:3001
+      PRODUCT_SERVICE_URL: http://product:3002
+      INVENTORY_SERVICE_URL: http://inventory:3003
+      CART_SERVICE_URL: http://cart:3004
+      ORDER_SERVICE_URL: http://order:3005
+      PAYMENT_SERVICE_URL: http://payment:3006
+      NOTIFICATION_SERVICE_URL: http://notification:3007
+      OTEL_SERVICE_NAME: api-gateway
+    volumes:
+      # The PUBLIC key only — this process verifies tokens and must not be
+      # able to mint them. Read-only, and a mount rather than a COPY so the
+      # key is never baked into an image.
+      - ./keys/jwt-public.pem:/app/keys/jwt-public.pem:ro
+    ports:
+      # The ONLY service published to the host. The other seven are reachable
+      # only from inside the compose network, which is the topology the
+      # design has claimed since Milestone 2 and has never actually had — on
+      # a laptop they all listen on 127.0.0.1.
+      - '3000:3000'
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      auth: { condition: service_started }
+
+  auth:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: auth }
+    environment:
+      <<: *db-host
+      PORT: 3001
+      OTEL_SERVICE_NAME: auth
+    volumes:
+      # BOTH keys: the Auth Service is the only process in the system that
+      # signs.
+      - ./keys:/app/keys:ro
+
+  product:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: product }
+    environment:
+      <<: *db-host
+      PORT: 3002
+      OTEL_SERVICE_NAME: product
+
+  inventory:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: inventory }
+    environment:
+      <<: *db-host
+      PORT: 3003
+      OTEL_SERVICE_NAME: inventory
+
+  cart:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: cart }
+    environment:
+      <<: *db-host
+      PORT: 3004
+      OTEL_SERVICE_NAME: cart
+      PRODUCT_SERVICE_URL: http://product:3002
+
+  order:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: order }
+    environment:
+      <<: *db-host
+      PORT: 3005
+      OTEL_SERVICE_NAME: order
+      CART_SERVICE_URL: http://cart:3004
+
+  payment:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: payment }
+    environment:
+      <<: *db-host
+      PORT: 3006
+      OTEL_SERVICE_NAME: payment
+
+  notification:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { APP: notification }
+    environment:
+      <<: *db-host
+      PORT: 3007
+      OTEL_SERVICE_NAME: notification
+      MAIL_TRANSPORT: smtp
+      MAIL_HOST: mailhog
+      MAIL_PORT: 1025
+
+  # ───────────────────────────────────────────────────────── one-shot ──
+  migrator:
+    # Built from the BUILDER stage, because migrations are run by
+    # sequelize-cli against the TypeScript workspace — the runtime images
+    # contain a single bundled main.js and none of the CLI.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+      args: { APP: auth }
+    env_file: .env
+    environment:
+      <<: *db-host
+    # `profiles` keeps it out of `docker compose up`: it is a task, not a
+    # service, and a task that restarts forever is a failure mode rather than
+    # a feature.
+    profiles: [tools]
+    command: ['npm', 'run', 'db:migrate']
+    working_dir: /workspace
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [ecommerce]
+
+networks:
+  ecommerce:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  rabbitmq-data:

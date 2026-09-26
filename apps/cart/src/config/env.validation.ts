@@ -18,6 +18,7 @@ export interface CartEnv {
   LOG_LEVEL: string;
   LOG_PRETTY: boolean;
   OTEL_ENABLED: boolean;
+  BIND_HOST: string;
   CART_SERVICE_PORT: number;
 
   CART_DB_HOST: string;
@@ -58,6 +59,16 @@ export const cartEnvSchema = Joi.object({
   // DOCUMENTED and validated like every other, and so a typo is a boot
   // failure rather than silently no traces.
   OTEL_ENABLED: Joi.boolean().default(false),
+
+  // Which interface to listen on. Read from process.env in main.ts, and
+  // declared here for the same reason OTEL_ENABLED is: so it is DOCUMENTED
+  // and a typo is a boot failure rather than a silent default.
+  //
+  // 127.0.0.1 everywhere except in a container, where loopback is the
+  // container's own and nothing outside it — including the gateway — can
+  // connect. docker-compose.yml sets 0.0.0.0 and publishes no port for this
+  // service, so the network namespace becomes the boundary instead.
+  BIND_HOST: Joi.string().default('127.0.0.1'),
 
   CART_SERVICE_PORT: Joi.number().port().default(3004),
 

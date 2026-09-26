@@ -138,10 +138,34 @@ async function bootstrap() {
   // HTTP first, for the same reason as everywhere else: awaiting the broker
   // before `listen()` means a down RabbitMQ takes the HTTP API with it.
   const port = config.get('NOTIFICATION_SERVICE_PORT', { infer: true });
-  await app.listen(port, '127.0.0.1');
+  /**
+   * WHERE AN INTERNAL SERVICE LISTENS, and why it is now configurable.
+   *
+   * `127.0.0.1` has been the right answer since Milestone 2: this service is
+   * internal, only the gateway may call it, and binding to loopback means the
+   * operating system itself refuses a connection from anywhere else. No
+   * firewall rule to forget, no "we assumed it was on a private network".
+   *
+   * A CONTAINER CHANGES THE ARITHMETIC, not the principle. Inside a container
+   * `127.0.0.1` is that container's own loopback, so a service bound to it is
+   * unreachable even from the gateway container next to it — the symptom is
+   * ECONNREFUSED from a service that is demonstrably running, which is a
+   * genuinely confusing hour.
+   *
+   * What replaces loopback as the boundary is the NETWORK NAMESPACE: in
+   * docker-compose.yml only the gateway publishes a port, so the other seven
+   * are reachable from inside the compose network and from nowhere else. The
+   * protection is the same shape, enforced one layer out.
+   *
+   * Default 127.0.0.1, so running on the host keeps the stricter behaviour and
+   * nobody has to remember to set anything.
+   */
+  const host = process.env.BIND_HOST ?? '127.0.0.1';
+
+  await app.listen(port, host);
 
   Logger.log(
-    `notification service listening on http://127.0.0.1:${port} (mail transport: ${config.get('MAIL_TRANSPORT', { infer: true })})`,
+    `notification service listening on http://${host}:${port} (mail transport: ${config.get('MAIL_TRANSPORT', { infer: true })})`,
     'Bootstrap',
   );
 

@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 12 — Production Hardening, complete.**
+> **Current status: Milestone 14 — Docker and Local Infrastructure.**
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -22,6 +22,8 @@ explains why it exists before it is added.
 > rotated on every use, that revokes the entire session if an already-used
 > one is ever replayed. And a message a consumer cannot process is **parked**
 > in a dead-letter queue with a replay path, rather than silently dropped.
+> The whole stack — eight services, PostgreSQL, Redis, RabbitMQ and MailHog —
+> starts with one `docker compose up`.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -42,6 +44,7 @@ item back.
 - [Messaging](#messaging)
 - [API](#api)
 - [Postman](#postman)
+- [Docker](#docker)
 - [Everyday commands](#everyday-commands)
 - [Environment variables](#environment-variables)
 - [Architecture decisions](#architecture-decisions)
@@ -162,7 +165,7 @@ another service's tables directly; they talk over REST or RabbitMQ.
 | Messaging            | RabbitMQ                                         | M7                         |
 | Email                | Nodemailer + MailHog                             | M10                        |
 | Logging / tracing    | Pino, OpenTelemetry, SigNoz                      | M11                        |
-| Testing              | Jest + Supertest                                 | throughout; formalised M13 |
+| Testing              | Jest                                             | unit specs throughout; M13 skipped |
 | Containers           | Docker + Docker Compose                          | M14                        |
 | CI                   | GitHub Actions                                   | M15                        |
 
@@ -295,6 +298,11 @@ locally.
 ```bash
 npm install
 ```
+
+> **The short way:** `npm run docker:up` starts everything — services and
+> infrastructure — and creates the seven databases for you. See
+> [Docker](#docker). The rest of this section is the manual route, which is
+> still the better one for day-to-day development.
 
 Start Redis and RabbitMQ — the simplest route is containers:
 
@@ -1046,6 +1054,132 @@ folder 2 saves a product id, and folders 3–5 use them.
 
 ---
 
+## Docker
+
+The whole system — eleven containers — on one command.
+
+```bash
+npm run docker:up
+```
+
+```bash
+npm run docker:migrate
+```
+
+The second one is separate on purpose: **migrations are not run at startup.**
+A service that migrates as it boots will, with three replicas, run three
+migrations at once; and a schema change that fails takes the deploy with it
+in a way nobody can see. Migrations are a deliberate step with a human behind
+them.
+
+| Command | What it does |
+| --- | --- |
+| `npm run docker:up` | Build and start everything |
+| `npm run docker:migrate` | Run every service's migrations |
+| `npm run docker:ps` | What is running, and whether it is healthy |
+| `npm run docker:logs` | Follow all logs (`docker compose logs -f order` for one) |
+| `npm run docker:down` | Stop, **keep** the data |
+| `npm run docker:reset` | Stop and **delete** the databases and queues |
+
+You still need `.env` (the containers read it) and the signing keypair
+(`node tools/generate-jwt-keys.mjs`), which is mounted read-only rather than
+baked into an image.
+
+### What is published, and what is not
+
+| | Host | Why |
+| --- | --- | --- |
+| API Gateway | `3000` | the only public entry point |
+| PostgreSQL | **5433** | not 5432 — see below |
+| Redis | `6379` | so you can `redis-cli` against it |
+| RabbitMQ | `5672`, UI `15672` | queue depths and the parked messages |
+| MailHog | SMTP `1025`, UI `8025` | read the emails the system sends |
+| The other seven services | **nothing** | they are internal |
+
+Postgres is on **5433** because a developer machine usually has its own
+Postgres on 5432. Publishing there either fails to bind or — much worse —
+silently points your tools at the wrong database. Inside the compose network
+the services still use 5432; the mapping only affects the host.
+
+The seven internal services publish **no port at all**. That is the topology
+this design has claimed since Milestone 2 and never actually had: running on
+a laptop, they all listen on `127.0.0.1` and anything on the machine can
+reach them. In compose, the network namespace is the boundary.
+
+### One Dockerfile, eight images
+
+```bash
+docker build --build-arg APP=auth -t ecommerce/auth .
+```
+
+Eight near-identical Dockerfiles drift: one gets a base-image update, one
+keeps running as root, one forgets `--omit=dev`. The only real difference
+between these services is which entry point runs.
+
+**Multi-stage**, so the toolchain does not ship. The builder holds the Nx
+workspace, TypeScript, every devDependency and the source — roughly 1.5GB,
+all of it attack surface that would have to be patched forever. The runtime
+image gets the compiled bundle, its production dependencies and nothing
+else. A compiler that is not in the image cannot be used by whoever gets in.
+
+Three details worth knowing:
+
+- **`npm ci` before `COPY . .`** — Docker caches layers by their inputs, so
+  an unchanged lockfile means the whole install is reused. Copying source
+  first would invalidate it on every edit and turn a twenty-second rebuild
+  into three minutes.
+- **`bcrypt` is native**, compiled at install time. The builder and the
+  runtime are both Alpine deliberately: a binary built against musl will not
+  load on glibc, and the error (`invalid ELF header`) reads like a corrupt
+  file rather than a base-image mismatch.
+- **`tini` as PID 1** — Node does not reap zombies or forward signals, so
+  without an init process `docker stop` can end in a SIGKILL, throwing away
+  the graceful shutdown built in Milestone 12.
+
+The images run as the unprivileged `node` user. Containers run as root by
+default; that is a default worth changing rather than explaining.
+
+### Startup order actually works
+
+Every infrastructure container has a **health check**, and the services wait
+for `condition: service_healthy` rather than `service_started`. Without it
+compose only waits for the container to *start* — and a Postgres container is
+up for several seconds before it will accept a connection, so every service
+crashes on boot, restarts, and eventually works. That is not a stack that
+starts; it is one that recovers, and the difference shows up as a minute of
+frightening logs every time.
+
+The application containers carry a `HEALTHCHECK` too, hitting the
+`/health/live` endpoint from Milestone 12 — the probe that checks nothing but
+the event loop, so a database blip cannot get a container killed.
+
+### The seven databases create themselves
+
+`docker/postgres-init.sh` runs on first start and creates one role and one
+database per service, with `REVOKE CONNECT … FROM PUBLIC` so a service's
+credentials cannot open another service's database. Database-per-service
+stops being a promise about the code and becomes a fact about the deployment.
+
+It runs **once**, on an empty data directory. Editing it later does nothing
+until you `npm run docker:reset` — that is the single most common confusion
+with the Postgres image.
+
+### Host or containers?
+
+Both work, and they are for different things.
+
+| | `npm start` on the host | `npm run docker:up` |
+| --- | --- | --- |
+| Start-up | seconds | a few minutes on the first build |
+| Debugging | attach a debugger, edit, reload | rebuild the image |
+| Realism | eight processes sharing your machine | eight containers, real network boundaries |
+| Orphaned processes | a known annoyance | gone — `docker compose down` |
+
+Develop on the host; use compose to check it really works, to demo it, and
+for anything where the network boundaries matter.
+
+---
+
 ## Everyday commands
 
 | Command                                                  | What it does                                                                                             |
@@ -1060,6 +1194,9 @@ folder 2 saves a product id, and folders 3–5 use them.
 | `npm run format`                                         | Rewrite files with Prettier                                                                              |
 | `npm run graph`                                          | Open the interactive Nx project graph                                                                    |
 | `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                                                               |
+| `npm run docker:up`                                       | Build and start the whole stack in containers                                                            |
+| `npm run docker:migrate`                                  | Run every migration against the containerised Postgres                                                   |
+| `npm run docker:down` / `docker:reset`                     | Stop, keeping / deleting the data                                                                        |
 
 ---
 

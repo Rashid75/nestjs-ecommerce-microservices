@@ -1,0 +1,49 @@
+# What must NOT be sent to the Docker daemon.
+#
+# This file is a security control as much as a speed one. Everything listed
+# here would otherwise be copied into the build context by `COPY . .` — and
+# a file that reaches the builder can end up in an image layer, where it
+# stays readable forever even if a later layer deletes it.
+#
+# The two that matter most are `.env` and `keys/`. A private signing key
+# baked into an image is a key you have published to everyone who can pull
+# it.
+
+# Secrets — never, under any circumstances.
+.env
+.env.*
+!.env.example
+keys/
+*.pem
+
+# Reinstalled inside the image, for the right platform. Copying the host's
+# node_modules would also copy native modules compiled for Windows.
+node_modules
+**/node_modules
+
+# Build output — rebuilt in the builder stage. Copying it risks shipping a
+# stale bundle that nothing in the image explains.
+dist
+tmp
+out-tsc
+
+# Caches, none of which mean anything inside a container.
+.nx
+.angular
+coverage
+*.tsbuildinfo
+
+# Local tooling and history.
+.git
+.gitignore
+.vscode
+.idea
+.claude
+*.log
+
+# Documentation and test assets. They change constantly, and every change
+# would otherwise invalidate the Docker layer cache for no reason.
+docs
+postman
+README.md
+*.md

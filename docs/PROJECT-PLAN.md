@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 12 of 15                                                              |
+| **Milestones complete** | 13 of 15 — M13 (testing) skipped at Rashid's request                  |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
-| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry                     |
+| **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry, Docker Compose     |
 | **Databases**           | one per service, seven in total                                       |
-| **Next milestone**      | 13 — Testing                                                          |
+| **Next milestone**      | 15 — CI/CD                                                            |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ██ M11 ██ M12 ██ M13 ░░ M14 ░░ M15 ░░
+M9 ██ M10 ██ M11 ██ M12 ██ M13 ⊘⊘ M14 ██ M15 ░░
 ```
 
 ---
@@ -1253,16 +1253,156 @@ PostgreSQL, run the replay, and the cart converts.
 
 ## ⬜ Milestone 13 — Testing
 
-Unit, integration and a full E2E: register → login → browse → cart → order →
-inventory → payment → confirmation → email.
+**SKIPPED for now**, on 2026-09-23. A full version was built and removed at
+Rashid's request: unit, application (HTTP-level, no infrastructure),
+integration against real `*_test_db` databases, and a whole-journey E2E
+script.
+
+What it had found before being removed is worth keeping, because it is the
+argument for bringing it back:
+
+- an ADMIN's successful catalogue write and the refresh-token
+  rotate/replay lifecycle were both covered for the first time — neither had
+  ever been demonstrated running, because one needs a hand-made admin and the
+  other needs a migration that is still pending;
+- two Milestone 12 bugs (`HealthModule` registered as a provider,
+  `serve.options.env` breaking every `nx serve`) are exactly the wiring
+  class of failure that only an application-level test catches.
+
+Trigger to revisit: the first regression that reaches a running system, or
+Milestone 15, where CI has nothing to run without it.
 
 ---
 
-## ⬜ Milestone 14 — Docker and Local Infrastructure
+## ✅ Milestone 14 — Docker and Local Infrastructure
 
-Multi-stage Dockerfiles, Docker Compose for the whole stack. `docker compose
-up` starts everything. This is also where the orphaned-dev-server problem
-disappears.
+**Complete.** Full reference: the [Docker chapter](../README.md#docker).
+
+### The question this answers
+
+> "How do I run this?"
+
+Until now the answer was three pages: install PostgreSQL, create seven roles
+and seven databases by hand, start Redis and RabbitMQ, run seven migration
+commands, then eleven terminals — and afterwards kill the Node processes that
+outlived `nx serve`.
+
+Now it is two commands, and the second one is separate on purpose.
+
+```bash
+npm run docker:up
+npm run docker:migrate
+```
+
+**Migrations do not run at startup.** A service that migrates as it boots
+runs three migrations at once with three replicas, and a failing schema
+change takes the deploy down in a way nobody can see. It stays a deliberate
+step with a human behind it.
+
+### Delivered
+
+**One Dockerfile for all eight services**, parameterised by `--build-arg APP`.
+Eight near-identical files drift: one gets a base-image update, one keeps
+running as root, one forgets `--omit=dev`. The only real difference between
+these services is which entry point runs.
+
+**Multi-stage**, so the toolchain does not ship. The builder holds the Nx
+workspace, TypeScript, every devDependency and the source — around 1.5GB, all
+of it attack surface someone has to patch forever. The runtime image gets the
+compiled bundle, its production dependencies and nothing else. A compiler
+that is not in the image cannot be used by whoever gets in.
+
+Three details that are easy to get wrong:
+
+- **`npm ci` before `COPY . .`.** Docker caches by layer inputs, so an
+  unchanged lockfile reuses the whole install. Copying source first
+  invalidates it on every edit — a twenty-second rebuild becomes three
+  minutes, and then nobody rebuilds.
+- **`bcrypt` is native.** Builder and runtime are both Alpine deliberately: a
+  binary compiled against musl will not load on glibc, and the error
+  (`invalid ELF header`) reads like a corrupt file rather than a base-image
+  mismatch.
+- **`tini` as PID 1.** Node neither reaps zombies nor forwards signals, so
+  without an init process `docker stop` ends in a SIGKILL — throwing away the
+  graceful shutdown built in Milestone 12. 30KB to make
+  `enableShutdownHooks()` mean something.
+
+Images run as the unprivileged `node` user, because containers run as root by
+default and that is a default worth changing rather than explaining.
+
+**`docker-compose.yml`** — eleven containers: PostgreSQL 18, Redis 7,
+RabbitMQ 3 with the management UI, MailHog, and the eight services.
+
+Only the **gateway publishes a port**. The other seven publish nothing, which
+is the topology this design has claimed since Milestone 2 and never actually
+had — on a laptop they all listen on `127.0.0.1` and anything on the machine
+can reach them.
+
+Postgres is published on **5433, not 5432**, because a developer machine
+usually has its own Postgres on 5432 and publishing there either fails to
+bind or, worse, silently points your tools at the wrong database.
+
+**Health checks make the startup order work.** Services wait for
+`condition: service_healthy`, not `service_started`. Without it compose only
+waits for the container to *start*, and a Postgres container is up for
+several seconds before it accepts a connection — so every service crashes,
+restarts, and eventually works. That is not a stack that starts; it is one
+that recovers, and it looks like a minute of frightening logs every time.
+
+The application containers also carry a `HEALTHCHECK` against `/health/live`
+— the Milestone 12 probe that checks nothing but the event loop, so a
+database blip cannot get a container killed.
+
+**`docker/postgres-init.sh`** creates the seven roles and seven databases on
+first start, with `REVOKE CONNECT … FROM PUBLIC` so one service's credentials
+cannot open another's database. Database-per-service stops being a promise
+about the code and becomes a fact about the deployment. It runs **once**, on
+an empty data directory — editing it later does nothing until
+`npm run docker:reset`, which is the most common confusion with this image.
+
+**A `migrator` service** built from the *builder* stage, because migrations
+run through sequelize-cli against the TypeScript workspace and the runtime
+images contain one bundled `main.js` and no CLI. It sits behind a
+`profiles: [tools]` so `docker compose up` ignores it: it is a task, and a
+task that restarts forever is a failure mode rather than a feature.
+
+**`.dockerignore`**, which is a security control as much as a speed one.
+`.env` and `keys/` are excluded — a private signing key baked into an image
+is a key published to everyone who can pull it. The keypair is **mounted
+read-only** instead, and the gateway gets only the public half: it verifies
+tokens and must not be able to mint them.
+
+### One code change this forced
+
+Every internal service bound to `127.0.0.1`. Inside a container that is the
+*container's* own loopback, so the service is unreachable from the gateway
+next door — ECONNREFUSED from a service that is demonstrably running, which
+is a genuinely confusing hour.
+
+`BIND_HOST` now defaults to `127.0.0.1` and compose sets `0.0.0.0`. The
+principle is unchanged; the boundary moves from the loopback interface to the
+network namespace, one layer out.
+
+### Verify
+
+```bash
+npm run docker:up && npm run docker:ps
+```
+
+Every container should reach `healthy`. Then `npm run docker:migrate`, and
+the Postman collection works unchanged against `localhost:3000`.
+
+### Deliberately not built
+
+- **A production deployment.** This stack is one host, no replication, no TLS
+  between services, no secret manager, guest credentials on the broker. The
+  images are production-shaped; the orchestration is not, and pretending
+  otherwise is how a compose file ends up in production.
+- **Hot reload in containers.** A bind-mounted source tree and `nx serve`
+  inside a container is possible and is a worse experience than running on
+  the host. Develop on the host; use compose to check it really works.
+- **Image scanning and pinned digests.** `node:24-alpine` is a moving tag.
+  Pinning by digest belongs with CI, which is Milestone 15.
 
 ---
 
