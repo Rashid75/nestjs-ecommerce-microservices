@@ -1,0 +1,252 @@
+# Continuous integration.
+#
+# WHAT CI IS FOR, because "run the tests on a server" undersells it.
+#
+# Every check here already exists on a laptop. The difference is that CI runs
+# them on a machine that has nothing — no .env, no keys, no node_modules, no
+# database, no "it works because I ran the migration last Tuesday". That is
+# the whole value: it proves the repository is SUFFICIENT, not just that the
+# author's machine is.
+#
+# Three jobs, deliberately ordered by what they cost:
+#
+#   verify   lint, unit tests, build. ~2 minutes, needs nothing. Catches
+#            almost everything, so it runs first and alone.
+#   images   eight Docker builds. ~5 minutes. Only worth starting once the
+#            code is known to compile.
+#   smoke    the whole stack up, migrated, and answering. The slowest and the
+#            only one that can catch a wiring mistake between containers.
+#
+# NO DEPLOYMENT. There is deliberately no job here that pushes an image to a
+# registry or touches a server. Adding one is a decision about credentials,
+# environments and who may release — not a line of YAML — and it needs an
+# explicit instruction rather than a default.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So it can be run by hand against any branch, which is what you want at
+  # 2am when you are not sure whether the problem is the code or the runner.
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first. Without this, pushing
+# three times in five minutes queues three full runs and you wait for answers
+# about code you have already replaced. `main` is excluded from cancellation:
+# its runs are the record of what was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  # Pinned to the version developed against, not `lts/*`. "Works on the
+  # runner's default" is how a build starts failing on a Tuesday because
+  # GitHub moved the default.
+  NODE_VERSION: '24'
+
+jobs:
+  verify:
+    name: lint · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # Caches ~/.npm keyed on the lockfile. Not node_modules itself:
+          # restoring that across OS or Node versions gives you native
+          # modules built for the wrong platform, which fails in ways that
+          # look nothing like a cache problem.
+          cache: npm
+
+      # `npm ci`, never `npm install`. `ci` installs exactly the lockfile and
+      # fails if package.json disagrees with it; `install` would quietly
+      # resolve a new version, so the thing CI tested is not the thing the
+      # lockfile describes.
+      - name: Install
+        run: npm ci
+
+      # ONE command for all three targets, because Nx runs them in
+      # dependency order and in parallel. Running them as three separate
+      # steps would serialise the whole thing for no benefit.
+      #
+      # `run-many`, not `affected`. Affected builds only what changed and is
+      # the reason people choose Nx — but it needs a base SHA, a remote
+      # cache to be worth much, and it turns "CI was green" into "CI was
+      # green for the part it decided to look at". At twelve projects and two
+      # minutes, determinism is worth more. Trigger to switch: when this job
+      # passes ten minutes.
+      - name: Lint, test and build everything
+        run: npx nx run-many -t lint test build --skip-nx-cache
+
+  images:
+    name: docker (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 30
+
+    strategy:
+      # One failing image should not hide the state of the other seven.
+      fail-fast: false
+      matrix:
+        app:
+          - api-gateway
+          - auth
+          - product
+          - inventory
+          - cart
+          - order
+          - payment
+          - notification
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.app }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: APP=${{ matrix.app }}
+          # NOT pushed. There is no registry configured and no decision made
+          # about who may publish. Building proves the Dockerfile works,
+          # which is what this job is for.
+          push: false
+          # Without a cache every one of the eight builds reinstalls the
+          # whole workspace. `gha` stores layers in GitHub's cache, so the
+          # dependency layer is built once and reused by the other seven.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  smoke:
+    name: the stack actually starts
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # The runner has no .env, and it must not have the real one. These are
+      # throwaway values for a stack that is deleted at the end of the job —
+      # which is exactly the point: if the repository cannot produce a
+      # working configuration from `.env.example`, then `.env.example` is
+      # wrong, and that is a bug worth failing on.
+      - name: Synthesise a configuration
+        run: |
+          cp .env.example .env
+          python3 - <<'PY'
+          import re, secrets, pathlib
+
+          env = pathlib.Path('.env')
+          text = env.read_text()
+
+          # Every password gets a fresh random value. None of them leaves
+          # this job.
+          def fill(key: str) -> None:
+              global text
+              text = re.sub(
+                  rf'^{key}=.*$',
+                  f'{key}={secrets.token_hex(16)}',
+                  text,
+                  flags=re.MULTILINE,
+              )
+
+          for service in ('AUTH', 'PRODUCT', 'INVENTORY', 'CART', 'ORDER',
+                          'PAYMENT', 'NOTIFICATION'):
+              fill(f'{service}_DB_PASSWORD')
+          fill('POSTGRES_SUPERUSER_PASSWORD')
+
+          env.write_text(text)
+          PY
+
+      # Generated per run, never committed, and thrown away with the runner.
+      - name: Generate signing keys
+        run: node tools/generate-jwt-keys.mjs
+
+      - name: Start the stack
+        run: docker compose up -d --build
+
+      # `docker compose up` returns as soon as the containers are created,
+      # not when they work. This waits for what the HEALTHCHECKs say, which
+      # is the same signal `depends_on: service_healthy` uses.
+      - name: Wait for every container to report healthy
+        run: |
+          for attempt in $(seq 1 60); do
+            unhealthy=$(docker compose ps --format '{{.Service}} {{.Health}}' \
+              | awk '$2 != "healthy" && $2 != "" { print $1 }')
+
+            if [ -z "$unhealthy" ]; then
+              echo "all containers healthy"
+              exit 0
+            fi
+
+            echo "waiting for: $unhealthy"
+            sleep 5
+          done
+
+          echo "::error::containers never became healthy"
+          exit 1
+
+      - name: Migrate
+        run: docker compose run --rm migrator
+
+      # The broker topology is NOT created by the services: Nest declares the
+      # queue it consumes and nothing else. Without this the dead-letter
+      # exchange does not exist and parked messages are silently dropped.
+      - name: Declare the broker topology
+        run: docker compose run --rm broker-setup
+
+      # The readiness probe is the one assertion worth making here: it checks
+      # the database, Redis and the broker from INSIDE the gateway container,
+      # so a 200 means the whole dependency graph is genuinely reachable.
+      - name: The gateway is ready
+        run: |
+          set -e
+          status=$(curl -s -o /tmp/ready.json -w '%{http_code}' http://localhost:3000/health/ready)
+          cat /tmp/ready.json
+          test "$status" = "200"
+
+      - name: Registration works end to end
+        run: |
+          set -e
+          status=$(curl -s -o /tmp/register.json -w '%{http_code}' \
+            -X POST http://localhost:3000/api/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci-'"$GITHUB_RUN_ID"'@example.test","password":"correct-horse-Battery9","firstName":"Ada","lastName":"Lovelace"}')
+
+          # 201 means: the image built, the container started, the migration
+          # applied, PostgreSQL accepted the credentials the init script
+          # created, the RS256 key was readable, and the gateway reached the
+          # Auth Service by its compose hostname. One number, a lot of wiring.
+          test "$status" = "201" || { cat /tmp/register.json; exit 1; }
+
+      # Only on failure, and this is the step that makes a red CI run
+      # actionable instead of a mystery.
+      - name: Logs
+        if: failure()
+        run: docker compose logs --tail=100
+
+      # `always()`, so a failed assertion still releases the volumes. A
+      # runner is thrown away anyway; the habit is what matters, because the
+      # same script run locally would otherwise leave a stack behind.
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -10,15 +10,15 @@ bring it back, rather than a vague "later".
 
 |                         |                                                                       |
 | ----------------------- | --------------------------------------------------------------------- |
-| **Milestones complete** | 13 of 15 — M13 (testing) skipped at Rashid's request                  |
+| **Milestones complete** | 14 of 15 — M13 (testing) skipped at Rashid's request                  |
 | **Services running**    | Gateway, Auth, Product, Inventory, Cart, Order, Payment, Notification |
 | **Infrastructure**      | PostgreSQL 18, Redis 7, RabbitMQ 3, OpenTelemetry, Docker Compose     |
 | **Databases**           | one per service, seven in total                                       |
-| **Next milestone**      | 15 — CI/CD                                                            |
+| **Next milestone**      | none — the plan is finished                                           |
 
 ```text
 M1 ██ M2 ██ M3 ██ M4 ██ M5 ██ M6 ██ M7 ██ M8 ██
-M9 ██ M10 ██ M11 ██ M12 ██ M13 ⊘⊘ M14 ██ M15 ░░
+M9 ██ M10 ██ M11 ██ M12 ██ M13 ⊘⊘ M14 ██ M15 ██
 ```
 
 ---
@@ -1406,10 +1406,137 @@ the Postman collection works unchanged against `localhost:3000`.
 
 ---
 
-## ⬜ Milestone 15 — CI/CD
+## ✅ Milestone 15 — CI/CD
 
-GitHub Actions: install → lint → unit → integration → build → docker build.
-No production deployment without explicit instruction.
+**Complete.** The last milestone.
+
+### The question this answers
+
+> "It works on my machine. Does it work?"
+
+Every check in the pipeline already exists on a laptop. The difference is
+that CI runs them on a machine with **nothing** — no `.env`, no keys, no
+`node_modules`, no database, no "it works because I ran that migration last
+Tuesday". That is the whole value: it proves the REPOSITORY is sufficient,
+not that the author's machine is.
+
+### Delivered
+
+**`.github/workflows/ci.yml`** — three jobs, ordered by what they cost:
+
+| Job | What it does | Why in that order |
+| --- | --- | --- |
+| `verify` | lint, unit tests, build | ~2 min, needs nothing, catches almost everything |
+| `images` | eight Docker builds, in a matrix | only worth starting once the code compiles |
+| `smoke` | the whole stack up, migrated, answering | the only job that catches wiring between containers |
+
+The **smoke job is the interesting one**, and it is what makes this milestone
+more than a formality. It builds a `.env` from `.env.example` with freshly
+generated random passwords, generates a signing keypair, brings the whole
+compose stack up, waits for every container to report `healthy`, runs the
+migrations and the broker setup, then asserts two things:
+
+- `GET /health/ready` answers **200** — checked from inside the gateway
+  container, so it means the database, Redis and the broker are all genuinely
+  reachable;
+- `POST /api/auth/register` answers **201**.
+
+That second number covers a lot of ground: the image built, the container
+started, the migration applied, PostgreSQL accepted credentials that the init
+script created, the RS256 key was readable at its mounted path, and the
+gateway found the Auth Service by its compose hostname. One assertion, most
+of Milestone 14.
+
+It also means **`.env.example` is now tested**. If the repository cannot
+produce a working configuration from it, the build fails — which is the right
+place for that to be discovered, rather than by the next person to clone it.
+
+Decisions worth knowing:
+
+- **`npm ci`, never `npm install`.** `ci` installs exactly the lockfile and
+  fails if `package.json` disagrees; `install` would quietly resolve
+  something newer, so the thing CI tested is not the thing the lockfile
+  describes.
+- **The npm cache, not `node_modules`.** Restoring `node_modules` across an
+  OS or Node version gives you native modules built for the wrong platform,
+  and it fails in ways that look nothing like a cache problem.
+- **`run-many`, not `affected`.** Affected is the reason people choose Nx,
+  and it turns "CI was green" into "CI was green for the part it decided to
+  look at". At twelve projects and two minutes, determinism wins. Trigger to
+  switch: when `verify` passes ten minutes.
+- **Node pinned to `24`, not `lts/*`.** "Works on the runner's default" is
+  how a build starts failing on a Tuesday because GitHub moved the default.
+- **Concurrency cancellation on branches, never on `main`** — those runs are
+  the record of what was green.
+
+**`.github/workflows/audit.yml`** — dependency and image scanning, on a
+weekly schedule and on any PR that touches the dependencies.
+
+Separate from CI **on purpose**: these fail for reasons that have nothing to
+do with the commit in front of them, because an advisory published overnight
+turns yesterday's green build red today. Mixed into CI, that teaches people
+that a red build is normal, which is the most expensive thing a pipeline can
+teach.
+
+Two gates, each chosen so it can actually be satisfied:
+
+- `npm audit --omit=dev --audit-level=high`. A vulnerability in a test runner
+  is real and is not shipped; gating on it produces a queue nobody can
+  prioritise. What ships is the production tree.
+- Trivy on the gateway image, **CRITICAL only**. A base image routinely
+  carries HIGH findings with no fix available, and a gate that cannot be
+  satisfied is one people learn to bypass. HIGH and MEDIUM are still printed,
+  where they can be read and judged.
+
+**`.github/dependabot.yml`** — npm, Docker and the Actions themselves, grouped
+by family so that `@nestjs/common` never arrives without `@nestjs/core`. The
+point is not to be current; it is to keep the cost of being current low
+enough that it always happens.
+
+### Two bugs this found
+
+Writing the smoke job is what surfaced them, which is the argument for the
+smoke job:
+
+- **RabbitMQ's `guest` user only accepts LOOPBACK connections.** Every
+  service would have been refused with `ACCESS_REFUSED`, which reads like a
+  wrong password rather than a policy. Compose now creates a real user.
+- **Nothing declared the dead-letter topology.** Nest declares the queue it
+  consumes and nothing else — so the DLX did not exist, and RabbitMQ silently
+  drops messages dead-lettered to a missing exchange. Exactly the failure
+  Milestone 12 pass 4 warned about, reintroduced by containerising. There is
+  now a `broker-setup` one-shot alongside `migrator`.
+
+### Verify
+
+```bash
+npm run verify
+```
+
+The same command the `verify` job runs, so "it passes locally" means the same
+thing. The rest needs the workflows to run on GitHub.
+
+### Deliberately not built — and this one is a decision, not an omission
+
+**There is no deployment job.** No image is pushed to a registry and nothing
+touches a server. That is not laziness: a deploy needs a registry, an
+environment, credentials with real blast radius, and an answer to "who may
+release". Those are decisions with owners, and a pipeline that guesses at
+them is worse than one that stops short.
+
+What a deployment job would need first, in order:
+
+1. a registry, and a decision about whether images are public;
+2. **digest-pinned base images** — `node:24-alpine` is a moving tag today;
+3. secrets from a manager rather than `.env`;
+4. an environment to deploy *to*, with approval gates;
+5. **the test suite from Milestone 13**, which was skipped. CI currently runs
+   unit tests and one smoke check; there is no coverage of the wiring between
+   services, and a deployment pipeline enforcing a suite that thin is a
+   formality rather than a gate.
+
+Also absent: `nx affected` with a remote cache, a release/versioning scheme,
+and SBOM generation.
 
 ---
 

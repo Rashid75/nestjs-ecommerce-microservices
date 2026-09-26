@@ -1,0 +1,61 @@
+# Automated dependency updates.
+#
+# WHY THIS IS A SECURITY CONTROL AND NOT HOUSEKEEPING. The alternative to
+# small, continuous updates is one enormous update, attempted the week an
+# advisory forces it, against a dependency tree that has moved two major
+# versions. That upgrade is risky, slow, and therefore postponed — which is
+# how a system ends up running a framework that stopped receiving patches.
+#
+# The point is not to be current. It is to keep the cost of being current low
+# enough that it always happens.
+
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # A cap, not a target. Twenty open pull requests is a wall nobody climbs;
+    # five is a morning's work.
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request per family. Updating @nestjs/common without
+      # @nestjs/core produces a version mismatch that fails at runtime with a
+      # dependency-injection error, and reviewing eleven separate PRs to
+      # assemble one coherent upgrade is worse than reviewing one.
+      nestjs:
+        patterns: ['@nestjs/*']
+      nx:
+        patterns: ['nx', '@nx/*']
+      opentelemetry:
+        patterns: ['@opentelemetry/*']
+      # Everything else, patch and minor only, in one PR. These are the
+      # updates that are almost always safe and almost never reviewed
+      # individually.
+      minor-and-patch:
+        update-types: ['minor', 'patch']
+    ignore:
+      # Node itself is pinned in the Dockerfile and in CI, and moving it is a
+      # decision about the runtime rather than a dependency bump.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+
+  # The base image. `node:24-alpine` is a moving tag, so this matters less
+  # than it would with a pinned digest — but it catches the day the 24 line
+  # stops being maintained, which a moving tag hides completely.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+
+  # The actions themselves. A workflow pinned to a v3 action that has been
+  # superseded is the least visible piece of stale infrastructure in a repo.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2

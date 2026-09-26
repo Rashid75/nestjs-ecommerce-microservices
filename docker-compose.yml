@@ -1,7 +1,8 @@
 # The whole system, on one command.
 #
 #   docker compose up -d --build     everything
-#   docker compose run --rm migrator run the migrations
+#   docker compose run --rm migrator      run the migrations
+#   docker compose run --rm broker-setup  declare the exchanges and queues
 #   docker compose logs -f order     one service's logs
 #   docker compose down              stop, keep the data
 #   docker compose down -v           stop and DELETE the databases
@@ -65,7 +66,12 @@ x-db-host: &db-host
   PAYMENT_DB_HOST: postgres
   NOTIFICATION_DB_HOST: postgres
   REDIS_URL: redis://redis:6379
-  RABBITMQ_URL: amqp://rabbitmq:5672
+  # WITH CREDENTIALS, and not the default ones. RabbitMQ's built-in `guest`
+  # user is restricted to LOOPBACK connections, so a container connecting as
+  # guest from across the network is refused — and the error
+  # ("ACCESS_REFUSED - Login was refused") reads like a wrong password rather
+  # than a policy. The broker below is given a real user instead.
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-ecommerce}:${RABBITMQ_PASSWORD:-ecommerce}@rabbitmq:5672
 
 services:
   # ──────────────────────────────────────────────────── infrastructure ──
@@ -122,6 +128,9 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ecommerce}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ecommerce}
     ports:
       - '5672:5672'
       - '15672:15672'
@@ -292,6 +301,31 @@ services:
     working_dir: /workspace
     depends_on:
       postgres: { condition: service_healthy }
+    networks: [ecommerce]
+
+  broker-setup:
+    # Declares the exchanges, the service queues WITH their dead-letter
+    # arguments, and the parking queues.
+    #
+    # THIS IS NOT OPTIONAL, and it is easy to believe it is. Nest declares
+    # the queue it consumes and nothing else — not the dead-letter exchange
+    # and not the parking queues. RabbitMQ will happily accept a queue that
+    # dead-letters to an exchange that does not exist, and then silently drop
+    # every message sent there. Dead-lettering that loses messages is worse
+    # than none, because you believe you are covered.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+      args: { APP: auth }
+    env_file: .env
+    environment:
+      <<: *db-host
+    profiles: [tools]
+    command: ['node', 'tools/setup-broker.mjs']
+    working_dir: /workspace
+    depends_on:
+      rabbitmq: { condition: service_healthy }
     networks: [ecommerce]
 
 networks:

@@ -35,6 +35,7 @@ coverage
 
 # Local tooling and history.
 .git
+.github
 .gitignore
 .vscode
 .idea

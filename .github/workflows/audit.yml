@@ -1,0 +1,108 @@
+# Dependency and image scanning.
+#
+# SEPARATE FROM ci.yml ON PURPOSE. These checks fail for reasons that have
+# nothing to do with the commit in front of them: an advisory published
+# overnight turns yesterday's green build red today. Mixed into CI, that
+# teaches people that a red build is normal — which is the most expensive
+# thing a pipeline can teach.
+#
+# Here they run on a schedule and on demand, where a failure means "somebody
+# look at this", not "your pull request is broken".
+
+name: Audit
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Weekly rather than daily: a scan nobody has time to
+    # act on is a notification people learn to close.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    # On a PR only when the dependencies themselves change, which is exactly
+    # when a human decision is being made about what to pull in.
+    paths:
+      - package.json
+      - package-lock.json
+      - Dockerfile
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # `--omit=dev` is the important flag. A vulnerability in a test runner
+      # is a real thing to fix and it is not shipped to anyone; gating on it
+      # produces a queue of findings that cannot be prioritised. What ships
+      # is the production dependency tree, and that is what this gates on.
+      #
+      # `high` rather than `moderate`: the threshold has to be one the team
+      # will actually stop for.
+      - name: Production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      # Informational, never blocking — so the devDependency findings are
+      # visible in the log without being able to stop anything.
+      - name: Everything else (informational)
+        if: always()
+        continue-on-error: true
+        run: npm audit
+
+  image:
+    name: image scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # One image, not eight. They share a base image and a build recipe, so
+      # eight scans produce eight copies of the same finding — and the eighth
+      # is read by nobody.
+      - name: Build the gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: APP=api-gateway
+          push: false
+          load: true
+          tags: ecommerce/api-gateway:scan
+          cache-from: type=gha
+
+      - name: Scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ecommerce/api-gateway:scan
+          format: table
+          # CRITICAL only as a GATE. A base image routinely carries HIGH
+          # findings with no fix available, and a gate that cannot be
+          # satisfied is one people learn to bypass. HIGH is still printed
+          # below, where it can be read and judged.
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Everything, including what has no fix (informational)
+        if: always()
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ecommerce/api-gateway:scan
+          format: table
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'

@@ -4,7 +4,7 @@ A production-oriented e-commerce backend, built incrementally as a learning
 project. Each milestone introduces one architectural concern at a time and
 explains why it exists before it is added.
 
-> **Current status: Milestone 14 — Docker and Local Infrastructure.**
+> **Current status: the 15-milestone plan is complete** (M13, testing, skipped).
 > Eight services over HTTP and RabbitMQ. A customer can register, browse,
 > fill a cart, place an order, pay for it against a mock provider, and be
 > emailed about all of it. Events now go through a **topic exchange**, so two
@@ -23,7 +23,9 @@ explains why it exists before it is added.
 > one is ever replayed. And a message a consumer cannot process is **parked**
 > in a dead-letter queue with a replay path, rather than silently dropped.
 > The whole stack — eight services, PostgreSQL, Redis, RabbitMQ and MailHog —
-> starts with one `docker compose up`.
+> starts with one `docker compose up`, and GitHub Actions proves on every
+> push that a machine with nothing on it can build, start and use the whole
+> thing.
 
 📋 **[Project plan and progress](docs/PROJECT-PLAN.md)** — all 15 milestones,
 what is delivered, what is deferred and the trigger that brings each deferred
@@ -45,6 +47,7 @@ item back.
 - [API](#api)
 - [Postman](#postman)
 - [Docker](#docker)
+- [CI](#ci)
 - [Everyday commands](#everyday-commands)
 - [Environment variables](#environment-variables)
 - [Architecture decisions](#architecture-decisions)
@@ -1180,6 +1183,82 @@ for anything where the network boundaries matter.
 
 ---
 
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to
+`main`, every pull request, and on demand.
+
+| Job | What it proves |
+| --- | --- |
+| `verify` | lint, unit tests and build, on a machine with nothing on it |
+| `images` | all eight Docker images build (matrix, layer cache shared) |
+| `smoke` | the whole compose stack starts, migrates, and answers |
+
+Run the first one yourself, with the same command CI uses:
+
+```bash
+npm run verify
+```
+
+### What the smoke job actually checks
+
+It builds a `.env` from `.env.example` with freshly generated passwords,
+generates a signing keypair, brings the stack up, waits for every container
+to report `healthy`, runs the migrations and the broker setup, and then
+asserts two things:
+
+- `GET /health/ready` → **200**, checked from inside the gateway container,
+  so it means PostgreSQL, Redis and RabbitMQ are all genuinely reachable;
+- `POST /api/auth/register` → **201**.
+
+That second number covers the image building, the container starting, the
+migration applying, PostgreSQL accepting credentials the init script created,
+the RS256 key being readable at its mounted path, and the gateway resolving
+the Auth Service by its compose hostname. One assertion, most of the
+containerisation.
+
+It also means **`.env.example` is tested**: if the repository cannot produce
+a working configuration from it, the build fails — which is a much better
+place to find that out than the next person to clone it.
+
+### Audit
+
+[`.github/workflows/audit.yml`](.github/workflows/audit.yml) runs weekly, and
+on any PR that changes dependencies:
+
+- `npm audit --omit=dev --audit-level=high` — gating on the **production**
+  tree, because a vulnerability in a test runner is real and is not shipped;
+- **Trivy** on the gateway image, gating on **CRITICAL only** — a base image
+  routinely carries HIGH findings with no fix available, and a gate that
+  cannot be satisfied is one people learn to bypass. HIGH and MEDIUM are
+  still printed.
+
+It is a separate workflow deliberately. These checks fail for reasons that
+have nothing to do with the commit in front of them, and mixing them into CI
+teaches people that a red build is normal.
+
+[`.github/dependabot.yml`](.github/dependabot.yml) keeps npm packages, the
+base image and the Actions themselves moving, grouped by family so
+`@nestjs/common` never arrives without `@nestjs/core`.
+
+### There is no deploy job, on purpose
+
+Nothing is pushed to a registry and nothing touches a server. A deployment
+needs a registry, an environment, credentials with real blast radius, and an
+answer to "who may release" — decisions with owners, not lines of YAML.
+
+What it would need first, in order:
+
+1. a registry, and a decision about whether images are public;
+2. digest-pinned base images (`node:24-alpine` is a moving tag);
+3. secrets from a manager rather than `.env`;
+4. an environment to deploy to, with approval gates;
+5. **the test suite from Milestone 13**, which was skipped — CI currently
+   runs unit tests and one smoke check, with nothing covering the wiring
+   between services.
+
+---
+
 ## Everyday commands
 
 | Command                                                  | What it does                                                                                             |
@@ -1190,12 +1269,14 @@ for anything where the network boundaries matter.
 | `npm run db:migrate`                                     | Migrate every service's database                                                                         |
 | `npm run build`                                          | Build every project into `dist/`                                                                         |
 | `npm run lint`                                           | ESLint across every project                                                                              |
+| `npm run verify`                                         | Lint, test and build — the same command CI runs                                                          |
 | `npm test`                                               | Jest across every project                                                                                |
 | `npm run format`                                         | Rewrite files with Prettier                                                                              |
 | `npm run graph`                                          | Open the interactive Nx project graph                                                                    |
 | `npm run demo:messaging`                                 | Watch an event travel from Product to Cart                                                               |
 | `npm run docker:up`                                       | Build and start the whole stack in containers                                                            |
 | `npm run docker:migrate`                                  | Run every migration against the containerised Postgres                                                   |
+| `docker compose run --rm broker-setup`                     | Declare the exchanges, queues and dead-letter topology                                                   |
 | `npm run docker:down` / `docker:reset`                     | Stop, keeping / deleting the data                                                                        |
 
 ---
