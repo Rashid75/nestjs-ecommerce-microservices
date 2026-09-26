@@ -50,7 +50,15 @@
     "docker:migrate": "docker compose run --rm migrator",
     "docker:logs": "docker compose logs -f",
     "docker:ps": "docker compose ps",
-    "verify": "nx run-many -t lint test build --skip-nx-cache"
+    "verify": "nx run-many -t lint test build --skip-nx-cache",
+    "auth:seed": "nx run auth:seed",
+    "auth:seed:undo": "nx run auth:seed:undo",
+    "product:seed": "nx run product:seed",
+    "product:seed:undo": "nx run product:seed:undo",
+    "inventory:seed": "nx run inventory:seed",
+    "inventory:seed:undo": "nx run inventory:seed:undo",
+    "db:seed": "nx run-many -t seed -p auth product inventory",
+    "db:seed:undo": "nx run-many -t seed:undo -p auth product inventory"
   },
   "private": true,
   "dependencies": {

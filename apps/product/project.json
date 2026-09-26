@@ -129,6 +129,15 @@
         "command": "sequelize-cli db:seed:all",
         "forwardAllArgs": true
       }
+    },
+    "seed:undo": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/product",
+        "command": "sequelize-cli db:seed:undo:all",
+        "forwardAllArgs": true
+      }
     }
   }
 }

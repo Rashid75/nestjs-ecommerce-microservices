@@ -120,6 +120,24 @@
         "command": "sequelize-cli migration:generate",
         "forwardAllArgs": true
       }
+    },
+    "seed": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/inventory",
+        "command": "sequelize-cli db:seed:all",
+        "forwardAllArgs": true
+      }
+    },
+    "seed:undo": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "apps/inventory",
+        "command": "sequelize-cli db:seed:undo:all",
+        "forwardAllArgs": true
+      }
     }
   }
 }

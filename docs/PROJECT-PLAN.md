@@ -1624,6 +1624,28 @@ exists so that "not yet" never quietly becomes "never".
 
 ---
 
+## Seed data
+
+`npm run db:seed` loads a demo catalogue — 3 categories, 8 products with
+stock, and an admin account — so nothing has to be created by hand to
+exercise the system. `npm run db:seed:undo` removes exactly those rows.
+
+Implemented as **sequelize-cli seeders**, one per owning service, reading a
+single shared file of fixed ids (`tools/seed-data.js`). The ids are
+hard-coded because the data lands in three databases that cannot see each
+other: the inventory row must carry the product id the Product Service used,
+and there is no foreign key to enforce it. Generating ids at seed time would
+mean one seeder reading another service's database — the cross-database
+dependency the architecture exists to prevent.
+
+It refuses to run with `NODE_ENV=production` unless
+`SEED_ALLOW_PRODUCTION=true`: it creates an administrator whose password is
+in a public repository.
+
+Details in the [Seed data chapter](../README.md#seed-data).
+
+---
+
 ## Database inventory
 
 Every PostgreSQL database **and role** is prefixed `ecommerce_`. Databases are

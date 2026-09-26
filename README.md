@@ -42,6 +42,7 @@ item back.
 - [Local setup](#local-setup)
 - [Signing keys](#signing-keys)
 - [Database and migrations](#database-and-migrations)
+- [Seed data](#seed-data)
 - [Caching and rate limiting](#caching-and-rate-limiting)
 - [Messaging](#messaging)
 - [API](#api)
@@ -354,6 +355,12 @@ Create the databases (next section), then:
 npm run db:migrate
 ```
 
+Then load the demo catalogue, so there is something to browse and buy:
+
+```bash
+npm run db:seed
+```
+
 ```bash
 npm start
 ```
@@ -459,6 +466,118 @@ without it a mid-way failure leaves a schema `SequelizeMeta` has no record of.
 Models and migrations are **separate concerns**, kept in sync by hand. The
 migration is the authoritative history; the model is one process's view of it.
 If they disagree, the migration is right.
+
+---
+
+## Seed data
+
+One command, any environment, no clicking:
+
+```bash
+npm run db:seed
+```
+
+It loads **3 categories, 8 products with stock, and an admin account** —
+enough to browse, fill a cart, place an order and pay for it without creating
+anything by hand.
+
+| Command | What it does |
+| --- | --- |
+| `npm run db:seed` | Seed everything (auth, product, inventory) |
+| `npm run db:seed:undo` | Remove exactly what the seeders inserted |
+| `npm run product:seed` | One service at a time, if you want just the catalogue |
+| `docker compose run --rm seeder` | The same thing against the containerised stack |
+
+Run it after the migrations — it writes rows, so the tables have to exist.
+
+### What you get
+
+| | |
+| --- | --- |
+| **Admin** | `admin@example.test` / `correct-horse-Battery9` |
+| **Categories** | Laptops, Monitors, Accessories |
+| **Products** | 8, all `ACTIVE`, priced 94.99–1899.00 USD |
+| **Stock** | 133 units, with an opening `RECEIVE` movement each |
+
+Two of the products are deliberately awkward, because the interesting paths
+need them:
+
+- **Framework Laptop 13** has a stock of **2**, so the insufficient-stock and
+  oversell paths are reachable without editing anything first.
+- **CalDigit TS4 Dock** has a stock of **0**, so "out of stock" is testable
+  the moment you seed.
+
+Change the admin password with `SEED_ADMIN_PASSWORD`, and the address with
+`SEED_ADMIN_EMAIL`:
+
+```bash
+SEED_ADMIN_PASSWORD='something-else' npm run db:seed
+```
+
+### Safe to run twice
+
+Two layers make it idempotent. sequelize-cli records what it has run in
+`SequelizeData` and skips it; and the ids are **fixed** rather than generated,
+so even against a database whose ledger was cleared, the insert is
+`ON CONFLICT DO NOTHING`.
+
+It also does **not update**. Change a price in `tools/seed-data.js` and a
+re-run will not notice — undo and re-seed.
+
+`db:seed:undo` deletes **only the seeded ids**, never the table. Someone will
+eventually run it against a database that also holds real work, and a seeder
+that truncates is a seeder that eats it.
+
+### Why the ids are hard-coded
+
+`tools/seed-data.js` is the single source, and every id in it is written out
+in full. That looks wrong until you notice the data lands in three databases
+that cannot see each other:
+
+```text
+ecommerce_product_db      categories, products
+ecommerce_inventory_db    inventory_items   (keyed by product_id)
+ecommerce_auth_db         the admin
+```
+
+The inventory row for the ThinkPad must carry the **same** `product_id` the
+Product Service used, and there is no foreign key to enforce it — the tables
+are in different databases. Generating ids at seed time would mean the
+inventory seeder reading the product database, which is exactly the
+cross-database dependency the architecture forbids. Fixed ids mean each
+service seeds independently, in any order, and they agree because they were
+told the same answer up front.
+
+The ids are readable on purpose (`…a11` a category, `…b21` a product), so a
+row in a log or a Postman response is recognisable as seed data at a glance.
+
+### It obeys the rules the application obeys
+
+The inventory seeder writes a `RECEIVE` row into `stock_movements` for every
+quantity it creates. Seeding the quantity alone would produce the one thing
+the append-only ledger exists to make impossible: stock that is there with no
+record of how it arrived. The product with zero stock gets no movement,
+because nothing was received.
+
+The admin's password is hashed with the same bcrypt at the same cost the
+service uses — a seeder that wrote a plaintext password would create an
+account that cannot log in, and the failure would look like a bug in the
+login path.
+
+### Production
+
+The seeder **refuses to run** with `NODE_ENV=production`:
+
+```text
+refusing to seed with NODE_ENV=production.
+This creates an admin account with a known password.
+```
+
+It creates an administrator whose credentials are in a public repository.
+That is right on a laptop and a privilege-escalation hole anywhere else. The
+override (`SEED_ALLOW_PRODUCTION=true`) exists because there are legitimate
+reasons to seed a throwaway environment that happens to be flagged
+production — and it has to be typed deliberately.
 
 ---
 
@@ -1267,6 +1386,8 @@ What it would need first, in order:
 | `npm run start:gateway` / `start:auth` / `start:product` | One service (also `start:inventory`, `start:cart`, `start:order`, `start:payment`, `start:notification`) |
 | `npm run stop`                                           | Kill anything left holding 3000–3006 / 9229–9235                                                         |
 | `npm run db:migrate`                                     | Migrate every service's database                                                                         |
+| `npm run db:seed`                                        | Load the demo catalogue, stock and an admin account                                                      |
+| `npm run db:seed:undo`                                   | Remove exactly what the seeders inserted                                                                 |
 | `npm run build`                                          | Build every project into `dist/`                                                                         |
 | `npm run lint`                                           | ESLint across every project                                                                              |
 | `npm run verify`                                         | Lint, test and build — the same command CI runs                                                          |
