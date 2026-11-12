@@ -75,7 +75,7 @@ jobs:
       # eight scans produce eight copies of the same finding — and the eighth
       # is read by nobody.
       - name: Build the gateway image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           build-args: APP=api-gateway
